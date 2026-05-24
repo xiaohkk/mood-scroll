@@ -1,15 +1,29 @@
 # Mood Scroll — TikTok Feed Curator
 
-Pick a mode. Mood Scroll classifies every TikTok video and auto-skips anything that doesn't match — watching + liking the ones that do — to train TikTok's algorithm in real time.
+Pick a mood. Mood Scroll classifies every TikTok video, auto-skips anything that doesn't match, and watches + likes the ones that do — training TikTok's algorithm to surface what you actually want.
 
-## Quick install (60 seconds)
+## What you need before installing
+
+**An API key.** You have two options:
+
+### Option A — Use the key the extension owner sent you
+If someone gave you Mood Scroll along with a `sk-…` key, you'll paste it during setup. The default proxy URL is already configured for you.
+
+### Option B — Bring your own OpenAI key
+1. Go to https://platform.openai.com/api-keys (login or sign up — free)
+2. Create a new secret key, copy it (starts with `sk-`)
+3. During setup, paste it AND change the proxy URL to `https://api.openai.com`
+
+You'll pay OpenAI directly — about $0.005 per video classification with gpt-4o. ~$1 will get you ~200 videos.
+
+## Install (60 seconds)
 
 1. Download **`mood-scroll-extension.zip`** and unzip anywhere.
 2. Open **chrome://extensions** in Chrome (or Brave / Arc / Edge).
 3. Toggle **Developer mode** ON (top-right corner).
-4. Click **Load unpacked** and select the unzipped **`chrome-mv3`** folder.
-5. The options page auto-opens. **Demo API key + proxy URL + model are pre-filled.** Just click **Save**.
-6. Open **tiktok.com/foryou** — yellow **✨** floating button appears bottom-right.
+4. Click **Load unpacked** → select the unzipped **`chrome-mv3`** folder.
+5. Options page auto-opens. Paste your API key (Option A or B above), click **Save**.
+6. Open **tiktok.com/foryou** → yellow **✨** floating button appears bottom-right.
 
 ## The 8 modes
 
@@ -17,63 +31,49 @@ Click the **✨** button to open the panel:
 
 | Mode | What it matches |
 |---|---|
-| **⏩ Auto Scroll** | Hands-off — watches every video, auto-likes, advances every 5s. No filtering. Just lets the feed train naturally on what plays. |
-| **🧠💀 Brain Rot** | Animated / AI-generated / edited slop. Family Guy + Subway Surfers stacked, Skibidi Toilet, AI Peter Griffin narrators, anime+phonk edits, sigma slow-mo edits, split-screen game-footage videos. Real-people content is NOT matched. |
-| **🍳 Cooking** | Recipe demonstrations and cooking technique. Food reviews / restaurant b-roll / dance-with-food are skipped. |
-| **😂 Laugh** | Genuine comedy — sketches with punchlines, witty edits, absurd humor. Skips cringe and mean pranks. |
-| **💎 LARP** | Visible wealth flex — Lambos, Rolexes, mansions, cash spreads, designer hauls, Tate-style alpha content. Any visible cash → instant LARP. |
-| **💪 Fitness** | Gym physique content — shirtless lifters, pump checks, deadlift/squat demos, bodybuilding aesthetic. |
-| **💅 Baddies** | Attractive women aesthetic content — gym girls, OOTD, glam, that-girl/clean-girl, slow-mo walks, fit checks. |
-| **✨ Custom** | Type ANY niche (e.g. `"vintage car restoration"`, `"60s rock"`, `"indie game dev"`). Classifier matches against your text. |
+| **⏩ Auto Scroll** | Hands-off — watches every video, auto-likes, advances every 5s. No filtering. |
+| **🧠💀 Brain Rot** | Animated / AI-generated / edited slop. Family Guy + Subway Surfers stacked, Skibidi Toilet, AI narrators, anime+phonk edits, sigma slow-mo, split-screen game-footage videos. |
+| **🍳 Cooking** | Actual recipe demos and cooking technique. Skips food reviews / restaurants. |
+| **😂 Laugh** | Genuine comedy — sketches with punchlines, witty edits. Skips cringe. |
+| **💎 LARP** | Visible wealth flex — Lambos, Rolexes, mansions, cash, designer hauls, Tate-style content. |
+| **💪 Fitness** | Gym physique content — shirtless lifters, pump checks, deadlift/squat demos. |
+| **💅 Baddies** | Attractive women aesthetic — gym girls, OOTD, glam, that-girl, slow-mo walks. |
+| **✨ Custom** | Type ANY niche (e.g. `"vintage car restoration"`). Classifier matches against your text. |
+
+## Smart features
+
+- **Two-phase training**: liking the broader content cluster during training (e.g. Cooking → also food reviews, LARP → also aspirational lifestyle) to push TikTok toward the niche faster. Once **🎯 LOCKED IN**, narrows to strict matches.
+- **Double-tap-to-like**: matches get a native double-tap gesture on the video (heart animation pops, stronger algo signal than sidebar button).
+- **Loop watchdog**: videos never replay — auto-advance before the loop point.
+- **🔄 Reset algo**: clears training state + opens TikTok content preferences so you can refresh the For You feed.
+- **📱 Phone Mode**: one click resizes Chrome to a 440px strip on the right edge of your screen + hides ALL of TikTok's nav/buttons/captions. Open Cursor / VS Code on the left 3/4.
+- **🪟 New Window**: opens TikTok in a separate narrow popup, current tabs untouched.
+- **📊 Receipt**: download a PNG of your session — what categories you actually watched.
 
 ## How it works under the hood (per video)
 
-1. **Sponsored skip** — TikTok ads + `#sponsored / #ad` always skip (every mode)
+1. **Sponsored skip** — TikTok ads + `#sponsored / #ad` always skip (free)
 2. **Negative hashtag pre-skip** — known-bad tags = instant skip (free, ~5ms)
-3. **Tier 1 keyword pre-skip** — confident non-matches skip (free, ~10ms)
-4. **API + vision** — gpt-4o with a frame + caption decides (~1-2s, ~$0.005)
+3. **Tier 1 keyword classifier** — confident non-matches skip (free, ~10ms)
+4. **API + vision** — gpt-4o with 3 video frames + caption decides (~1-2s)
 5. **Local match** — does category match your mode's allow-list?
-6. **Match** → auto-like + hold for category-appropriate time → advance
+6. **Match** → double-tap-like + hold for category-appropriate time → advance
 
-**Visual modes** (LARP / Baddies / Brain Rot / Fitness) **skip steps 2-3** and go straight to API + frame — visual evidence is the truth.
-
-## Two power layouts
-
-### 📱 Phone Mode
-One click → Chrome resizes to 440px on the right edge of your screen + ALL of TikTok's chrome (nav, header, like/comment/save buttons, captions, music label) hides. Open Cursor / VS Code on the left 3/4 — TikTok keeps auto-scrolling in the narrow panel.
-
-### 🪟 New Window
-Opens TikTok in a separate narrow Chrome popup. Current tabs stay full-size.
-
-## What TikTok's algorithm learns
-- **Watch time** (the #1 ranking signal — matches hold 5-15s based on category)
-- **Likes** (auto-liked on every match within rate limit)
-- **Skips** (fast non-match skipping signals "don't show this")
-
-After ~10-20 matched videos, a green **🎯 LOCKED IN** banner pops to confirm convergence. From then on, your feed is curated to your mood.
-
-## Demo API key (shared across testers)
-
-The pre-filled key is a demo with $80 of credits, shared across all installs. ~16,000 video classifications at gpt-4o rates. If it runs out:
-
-- **OpenAI**: https://platform.openai.com → API keys
-- Paste in **Options** → click **Save**
+Visual modes (LARP / Baddies / Brain Rot / Fitness) skip steps 2-3 and go straight to API + frames — visual evidence is the truth.
 
 ## Privacy
 
 - Everything runs locally in your browser.
-- The only network request is to the classifier API with video frames + caption text.
+- The only network request is to your chosen API endpoint with video frames + caption text.
+- Your API key, mode preference, and session data live in `chrome.storage.local` — never uploaded.
 - No tracking, no accounts, no analytics.
-- All state lives in `chrome.storage.local`.
 
-## Files
+## If something breaks
 
-```
-chrome-mv3/                  — the loadable extension
-mood-scroll-extension.zip    — same thing zipped for sharing
-mood-scroll-demo.mp4         — 24s demo video
-mood-scroll-demo-contact-sheet.jpg — preview thumbnails
-SETUP.md                     — this file
-```
+Open Chrome DevTools on the TikTok page (`⌘+⌥+I` → Console tab). Look for `[MoodScroll]` lines:
+- `[MoodScroll] classify error: ... 401` → API key is wrong or missing
+- `[MoodScroll] classify error: ... 402` → out of credit (top up your key)
+- `[MoodScroll] MATCH: ...` / `SKIP: ...` → classifier is working
+- Nothing logged → extension isn't injecting; refresh chrome://extensions ⟳ and the tab
 
-Built with [WXT](https://wxt.dev) (TypeScript + Vite). 322 KB built.
+Built with [WXT](https://wxt.dev) (TypeScript + Vite).

@@ -1,6 +1,5 @@
 const DEFAULT_PROXY_URL = 'https://muon-lite.up.railway.app';
 const DEFAULT_MODEL = 'openai/gpt-4o';
-const DEMO_KEY = 'REDACTED-WAS-DEMO-KEY';
 
 async function init() {
   const stored = await chrome.storage.local.get(['apiKey', 'proxyUrl', 'model']);
@@ -8,7 +7,8 @@ async function init() {
   const proxyInput = document.getElementById('proxyUrl') as HTMLInputElement;
   const modelSelect = document.getElementById('model') as HTMLSelectElement;
 
-  apiKeyInput.value = stored.apiKey || DEMO_KEY;
+  // No pre-filled key — user must paste their own.
+  apiKeyInput.value = stored.apiKey || '';
   proxyInput.value = stored.proxyUrl || DEFAULT_PROXY_URL;
   modelSelect.value = stored.model || DEFAULT_MODEL;
 

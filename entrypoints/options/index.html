@@ -68,14 +68,18 @@
   <div class="tagline">Pick a mode. We curate your feed in real time.</div>
 
   <div class="preset-note">
-    <b>Pre-configured for the demo.</b> Default proxy + key are filled in. Just click Save.
+    <b>You need an API key to use Mood Scroll.</b> The default proxy + model are already filled in — you just need to paste a key.
+    <br><br>
+    Don't have one? Either:
+    <br>• Ask whoever sent you the extension for a key (<code>sk-…</code>)
+    <br>• Or get a free <a href="https://platform.openai.com/api-keys" target="_blank">OpenAI key</a> and change the Proxy URL to <code>https://api.openai.com</code>
   </div>
 
   <div class="field">
     <label for="apiKey">API key</label>
-    <input type="text" id="apiKey" placeholder="sk-...">
+    <input type="text" id="apiKey" placeholder="sk-... (paste your key here)">
     <div class="hint">
-      Sent as <code>x-api-key</code> header to the proxy below. Stored locally in your browser only.
+      Sent as <code>x-api-key</code> header to the proxy below. Stored locally in your browser only — never uploaded anywhere.
     </div>
   </div>
 
@@ -83,7 +87,7 @@
     <label for="proxyUrl">Proxy URL</label>
     <input type="text" id="proxyUrl" placeholder="https://muon-lite.up.railway.app">
     <div class="hint">
-      Anthropic-compatible endpoint. The extension POSTs to <code>{url}/v1/messages</code>.
+      Anthropic-compatible endpoint. Extension POSTs to <code>{url}/v1/messages</code>. Leave as-is if you got a <code>sk-…</code> key from the extension owner.
     </div>
   </div>
 
