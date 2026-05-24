@@ -814,7 +814,7 @@ export default defineContentScript({
           lastClassifiedVideoSrc = null;
           likedVideoSrcs.clear();
           likeTimestamps.length = 0;
-          await chrome.storage.local.set({ currentMode: null }).catch(() => {});
+          await chrome.storage.local.set({ currentMode: null, justReset: true }).catch(() => {});
           const sessionRes = await chrome.runtime.sendMessage({ type: 'reset_session' }).catch((e: any) => ({ error: String(e) }));
           console.log('[MoodScroll] session cleared:', sessionRes);
           updatePhaseUI();
@@ -825,6 +825,13 @@ export default defineContentScript({
           // Open TikTok content preferences in a new tab — user clicks "Refresh For You" there
           const settingsRes = await chrome.runtime.sendMessage({ type: 'open_tiktok_settings' }).catch((e: any) => ({ error: String(e) }));
           console.log('[MoodScroll] TikTok settings tab opened:', settingsRes, '(was mode:', prevMode, ')');
+          // Hard reload this tab after the banner so the user gets an
+          // undeniable visual reset. Navigate to /foryou so they land back
+          // on the feed cleanly even if they were on a profile/video page.
+          setTimeout(() => {
+            console.log('[MoodScroll] 🔁 Reloading TikTok tab to /foryou for clean state…');
+            window.location.href = 'https://www.tiktok.com/foryou';
+          }, 2200);
         });
       }
 
@@ -981,7 +988,7 @@ export default defineContentScript({
       const prevIcon = icon.textContent;
       icon.textContent = '🔄';
       title.textContent = 'RESET COMPLETE';
-      sub.textContent = 'TikTok settings opened — click "Refresh your For You feed"';
+      sub.textContent = 'Refreshing feed… click "Refresh your For You feed" in the new tab too';
       banner.classList.add('show');
       setTimeout(() => {
         banner.classList.remove('show');
@@ -1059,6 +1066,28 @@ export default defineContentScript({
     document.addEventListener('DOMContentLoaded', () => ensureOverlay(), { once: true });
 
     setInterval(updateOverlayStats, 1000);
+
+    // If we just reloaded after a Reset Algo click, show a confirmation
+    // banner so the user knows the reset went through (banner from before
+    // the reload is gone because the page navigated).
+    chrome.storage.local.get(['justReset']).then(({ justReset }) => {
+      if (!justReset) return;
+      chrome.storage.local.remove('justReset');
+      const tryShow = () => {
+        if (!shadow) { setTimeout(tryShow, 200); return; }
+        const banner = shadow.getElementById('ms-locked-banner');
+        if (!banner) { setTimeout(tryShow, 200); return; }
+        const title = banner.querySelector('.ms-locked-title') as HTMLElement;
+        const sub = banner.querySelector('.ms-locked-sub') as HTMLElement;
+        const icon = banner.querySelector('.ms-locked-icon') as HTMLElement;
+        icon.textContent = '✅';
+        title.textContent = 'RESET DONE';
+        sub.textContent = 'Pick a mode to start training a fresh algorithm';
+        banner.classList.add('show');
+        setTimeout(() => banner.classList.remove('show'), 4000);
+      };
+      tryShow();
+    });
 
     // ---------- AUTO-ADVANCE TICK (for matched videos in mode-filter scrolling) ----------
     // After a match is classified, autoAdvanceAt is set to (now + WATCH_DURATIONS[category]).
