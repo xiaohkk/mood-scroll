@@ -150,13 +150,15 @@ export default defineContentScript({
         'gaming', 'sports', 'wedding', 'travel'
       ],
       cooking: [
-        'dance', 'makeup', 'beauty', 'fashion', 'outfit', 'nails',
-        'workout', 'gym', 'fitness', 'bodybuilding',
+        // Trimmed: removed 'tutorial' (cooking videos use #cookingtutorial),
+        // 'pov' (POV cooking exists: "POV: making dinner"), 'wedding' (wedding
+        // cakes are cooking), 'travel' (travel cooking shows), 'singing'
+        // (singing chefs), 'comedy'/'funny' (comedic cooking videos exist).
+        'dance', 'dancing', 'makeup', 'beauty', 'fashion', 'outfit', 'nails', 'hair',
+        'workout', 'gym', 'fitness', 'bodybuilding', 'cardio',
         'startup', 'business', 'finance', 'crypto', 'stocks',
         'asmr', 'slime', 'sleep',
-        'pov', 'skit', 'comedy', 'funny', 'meme', 'prank',
-        'gaming', 'sports', 'music', 'singing',
-        'travel', 'wedding', 'tutorial' // tutorial often = makeup/dance tutorial
+        'gaming', 'minecraft', 'fortnite', 'sports', 'football', 'basketball'
       ],
       laugh: [
         'recipe', 'cooking', 'foodtok',
