@@ -18,10 +18,15 @@ export const MODES = [
     broadMatches: ['larp', 'motivational', 'fitness'] },
   { id: 'fitness',     emoji: '💪',   label: 'Fitness',
     matches: ['fitness'],
-    broadMatches: ['fitness', 'motivational', 'baddies'] },
+    // Don't broaden to 'baddies' here either — that would pull in
+    // glam/OOTD videos that aren't actual gym content.
+    broadMatches: ['fitness', 'motivational'] },
   { id: 'baddies',     emoji: '💅',   label: 'Baddies',
     matches: ['baddies'],
-    broadMatches: ['baddies', 'fitness'] },
+    // DON'T include 'fitness' here — fitness videos include shirtless
+    // men/deadlifts that have nothing to do with attractive women.
+    // Keep baddies strict even in training: only true baddies videos match.
+    broadMatches: ['baddies'] },
   { id: 'custom',      emoji: '✨',   label: 'Custom',     matches: [], broadMatches: [] }
 ] as const;
 
