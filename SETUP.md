@@ -1,74 +1,79 @@
 # Mood Scroll — TikTok Feed Curator
 
-Pick a mood. Mood Scroll auto-skips TikTok videos that don't match it and watches + likes the ones that do — training TikTok's algorithm in real time.
+Pick a mode. Mood Scroll classifies every TikTok video and auto-skips anything that doesn't match — watching + liking the ones that do — to train TikTok's algorithm in real time.
 
 ## Quick install (60 seconds)
 
-1. **Download** `mood-scroll-extension.zip` and unzip anywhere.
-2. Open **chrome://extensions** in Chrome (or any Chromium browser — Brave, Arc, Edge).
+1. Download **`mood-scroll-extension.zip`** and unzip anywhere.
+2. Open **chrome://extensions** in Chrome (or Brave / Arc / Edge).
 3. Toggle **Developer mode** ON (top-right corner).
-4. Click **Load unpacked** and select the unzipped `chrome-mv3` folder.
-5. The options page auto-opens. **The demo API key + proxy are pre-filled.** Just click **Save**.
+4. Click **Load unpacked** and select the unzipped **`chrome-mv3`** folder.
+5. The options page auto-opens. **Demo API key + proxy URL + model are pre-filled.** Just click **Save**.
 6. Open **tiktok.com/foryou** — yellow **✨** floating button appears bottom-right.
 
-## How to use
+## The 8 modes
 
-Click the **✨** button to open the panel, then pick one of 5 modes:
+Click the **✨** button to open the panel:
 
-| Mode | What it does |
+| Mode | What it matches |
 |---|---|
-| **⏩ Auto Scroll** | Hands-off — watches each video, auto-likes it, advances every 5s. No filtering, just lets the feed train naturally. |
-| **🧠💀 Brain Rot** | Keeps mindless dopamine content (satisfying loops, weird trends, animal antics, food porn). Skips everything that requires thinking. |
-| **🍳 Cooking** | Only videos that actually show recipes or cooking technique. Skips food reviews, restaurant b-roll, dance videos with food. |
-| **😂 Laugh** | Only genuinely funny content — sketches, witty edits, absurd humor. Skips cringe and mean-spirited pranks. |
-| **✨ Custom** | Type ANY niche description (e.g. `"indie game dev"`, `"60s rock"`, `"vintage car restoration"`). The classifier matches against your exact prompt. |
+| **⏩ Auto Scroll** | Hands-off — watches every video, auto-likes, advances every 5s. No filtering. Just lets the feed train naturally on what plays. |
+| **🧠💀 Brain Rot** | Animated / AI-generated / edited slop. Family Guy + Subway Surfers stacked, Skibidi Toilet, AI Peter Griffin narrators, anime+phonk edits, sigma slow-mo edits, split-screen game-footage videos. Real-people content is NOT matched. |
+| **🍳 Cooking** | Recipe demonstrations and cooking technique. Food reviews / restaurant b-roll / dance-with-food are skipped. |
+| **😂 Laugh** | Genuine comedy — sketches with punchlines, witty edits, absurd humor. Skips cringe and mean pranks. |
+| **💎 LARP** | Visible wealth flex — Lambos, Rolexes, mansions, cash spreads, designer hauls, Tate-style alpha content. Any visible cash → instant LARP. |
+| **💪 Fitness** | Gym physique content — shirtless lifters, pump checks, deadlift/squat demos, bodybuilding aesthetic. |
+| **💅 Baddies** | Attractive women aesthetic content — gym girls, OOTD, glam, that-girl/clean-girl, slow-mo walks, fit checks. |
+| **✨ Custom** | Type ANY niche (e.g. `"vintage car restoration"`, `"60s rock"`, `"indie game dev"`). Classifier matches against your text. |
 
-### How it works under the hood
-For every video:
-1. **Instant pre-skip** if a hashtag clearly disqualifies it (free, ~5ms)
-2. **Keyword negative-skip** for confident non-matches (free, ~10ms)
-3. **GPT-4o-mini vision verification** — sends one frame of the video + caption + creator → returns category (~700ms, ~$0.002)
-4. **Local match decision** — does the category match the mode? If yes → auto-like + hold for category-appropriate time. If no → skip immediately.
+## How it works under the hood (per video)
 
-## Two power features
+1. **Sponsored skip** — TikTok ads + `#sponsored / #ad` always skip (every mode)
+2. **Negative hashtag pre-skip** — known-bad tags = instant skip (free, ~5ms)
+3. **Tier 1 keyword pre-skip** — confident non-matches skip (free, ~10ms)
+4. **API + vision** — gpt-4o with a frame + caption decides (~1-2s, ~$0.005)
+5. **Local match** — does category match your mode's allow-list?
+6. **Match** → auto-like + hold for category-appropriate time → advance
+
+**Visual modes** (LARP / Baddies / Brain Rot / Fitness) **skip steps 2-3** and go straight to API + frame — visual evidence is the truth.
+
+## Two power layouts
 
 ### 📱 Phone Mode
-Click **📱 Phone Mode** in the panel → Chrome resizes to a 440px strip on the right edge of your screen + hides ALL of TikTok's chrome (nav, header, like/comment buttons, captions). Open Cursor / VS Code on the left 3/4. TikTok keeps auto-scrolling on the right.
+One click → Chrome resizes to 440px on the right edge of your screen + ALL of TikTok's chrome (nav, header, like/comment/save buttons, captions, music label) hides. Open Cursor / VS Code on the left 3/4 — TikTok keeps auto-scrolling in the narrow panel.
 
 ### 🪟 New Window
-Click **🪟 New Window** → opens TikTok in a separate narrow Chrome popup. Your current tabs stay full-size.
+Opens TikTok in a separate narrow Chrome popup. Current tabs stay full-size.
 
-## What the algorithm learns
-- **Watch time** (the strongest TikTok signal — matches hold 10-15s before advancing)
-- **Likes** (auto-liked on every match)
-- **Skips** (fast-skip negative signal on non-matches)
+## What TikTok's algorithm learns
+- **Watch time** (the #1 ranking signal — matches hold 5-15s based on category)
+- **Likes** (auto-liked on every match within rate limit)
+- **Skips** (fast non-match skipping signals "don't show this")
 
-After ~10-20 matched videos, a green **🎯 LOCKED IN** banner pops to confirm TikTok's algo has converged on your mood. From then on, your feed is curated.
+After ~10-20 matched videos, a green **🎯 LOCKED IN** banner pops to confirm convergence. From then on, your feed is curated to your mood.
 
 ## Demo API key (shared across testers)
 
-The pre-filled key is a demo key with limited credits (~40,000 video classifications shared across all users). If it runs out, get your own free key:
+The pre-filled key is a demo with $80 of credits, shared across all installs. ~16,000 video classifications at gpt-4o rates. If it runs out:
 
-- **OpenAI**: https://platform.openai.com → API keys → create one starting with `sk-...`
+- **OpenAI**: https://platform.openai.com → API keys
 - Paste in **Options** → click **Save**
 
 ## Privacy
 
 - Everything runs locally in your browser.
 - The only network request is to the classifier API with video frames + caption text.
-- No tracking, no analytics, no accounts.
-- All session data lives in `chrome.storage.local`.
+- No tracking, no accounts, no analytics.
+- All state lives in `chrome.storage.local`.
 
-## Files in this package
+## Files
 
 ```
-chrome-mv3/                — the loadable extension folder
-├── manifest.json
-├── background.js           — service worker (API calls)
-├── content-scripts/        — runs on tiktok.com
-├── popup.html
-├── options.html            — pre-filled setup
-└── receipt.html            — your "feed diet" stats
+chrome-mv3/                  — the loadable extension
+mood-scroll-extension.zip    — same thing zipped for sharing
+mood-scroll-demo.mp4         — 24s demo video
+mood-scroll-demo-contact-sheet.jpg — preview thumbnails
+SETUP.md                     — this file
 ```
 
-Built with [WXT](https://wxt.dev) (TypeScript + Vite). Source on request.
+Built with [WXT](https://wxt.dev) (TypeScript + Vite). 322 KB built.
