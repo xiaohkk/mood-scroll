@@ -208,12 +208,11 @@ function serialized<T>(fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
-const DEFAULT_PROXY_URL = 'https://muon-lite.up.railway.app';
-// Back to gpt-4o for speed. gpt-5.1 is technically smarter but it's a
-// reasoning model (slower) and the long taxonomy prompt was confusing it.
-// gpt-4o + dramatically shorter mode-specific prompts = faster AND more
-// accurate (less to confuse the model). ~$0.005/call.
-const DEFAULT_MODEL = 'openai/gpt-4o';
+// Public users hit OpenAI directly with their own key. Users we
+// onboard personally (with a muon-lite key) can change the URL to
+// https://muon-lite.up.railway.app in the options page.
+const DEFAULT_PROXY_URL = 'https://api.openai.com';
+const DEFAULT_MODEL = 'gpt-4o';
 
 // Mode-specific prompts — focused yes/no instead of the giant taxonomy.
 // Returns `{category, matches_mode, confidence, reason}`. category is
@@ -353,53 +352,47 @@ async function classifyWithClaude(args: {
     `Creator: ${args.creator || '(unknown)'}\n\n` +
     `${args.frames.length} video frame${args.frames.length === 1 ? '' : 's'} attached. Classify per the system prompt. JSON only.`;
 
-  // Anthropic Messages API format. LiteLLM proxy at muon-lite accepts this directly.
-  // When frames array is empty (text-only classification during training phase),
-  // we just send the text content for a much faster + cheaper response.
-  const imageBlocks = (args.frames || []).map(frame => ({
-    type: 'image' as const,
-    source: {
-      type: 'base64' as const,
-      media_type: 'image/jpeg' as const,
-      data: stripPrefix(frame)
-    }
+  // OpenAI chat-completions format with vision support. Each frame becomes
+  // an image_url part with a base64 data URL. The user's apiKey is sent
+  // as a Bearer token.
+  // Auto-detects if proxyUrl points to a LiteLLM-style proxy (muon-lite)
+  // by checking for /v1/messages support — if the URL is api.openai.com
+  // OR any custom URL, we use OpenAI's /v1/chat/completions.
+  const imageParts = (args.frames || []).map(frame => ({
+    type: 'image_url' as const,
+    image_url: { url: frame.startsWith('data:') ? frame : `data:image/jpeg;base64,${frame}` }
   }));
 
   const baseUrl = (args.proxyUrl || DEFAULT_PROXY_URL).replace(/\/+$/, '');
-  const url = `${baseUrl}/v1/messages`;
+  const url = `${baseUrl}/v1/chat/completions`;
 
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-api-key': args.apiKey,
-      'anthropic-version': '2023-06-01'
+      'authorization': `Bearer ${args.apiKey}`
     },
     body: JSON.stringify({
       model: args.model || DEFAULT_MODEL,
-      max_tokens: 120, // short focused responses — JSON only
-      temperature: 0, // deterministic — same input always gets same classification
-      system: systemPrompt,
-      messages: [{
-        role: 'user',
-        content: [...imageBlocks, { type: 'text', text: userText }]
-      }]
+      max_tokens: 120,
+      temperature: 0,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: [...imageParts, { type: 'text', text: userText }] }
+      ]
     })
   });
 
   if (!res.ok) {
     const errorText = await res.text();
-    throw new Error(`Claude ${res.status}: ${errorText.slice(0, 300)}`);
+    throw new Error(`OpenAI ${res.status}: ${errorText.slice(0, 300)}`);
   }
 
   const data = await res.json();
-  // Anthropic response: { content: [{type:'text', text:'...'}] }
-  const textBlock = Array.isArray(data?.content)
-    ? data.content.find((b: any) => b?.type === 'text')
-    : null;
-  const text = textBlock?.text;
+  // OpenAI response: { choices: [{ message: { content: '...' } }] }
+  const text = data?.choices?.[0]?.message?.content;
   if (!text) {
-    throw new Error('Claude returned no text: ' + JSON.stringify(data).slice(0, 200));
+    throw new Error('OpenAI returned no text: ' + JSON.stringify(data).slice(0, 200));
   }
   const cleaned = text.replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
   try {

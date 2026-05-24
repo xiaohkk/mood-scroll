@@ -1,5 +1,5 @@
-const DEFAULT_PROXY_URL = 'https://muon-lite.up.railway.app';
-const DEFAULT_MODEL = 'openai/gpt-4o';
+const DEFAULT_PROXY_URL = 'https://api.openai.com';
+const DEFAULT_MODEL = 'gpt-4o';
 
 async function init() {
   const stored = await chrome.storage.local.get(['apiKey', 'proxyUrl', 'model']);
