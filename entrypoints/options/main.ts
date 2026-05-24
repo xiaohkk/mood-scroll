@@ -1,5 +1,5 @@
 const DEFAULT_PROXY_URL = 'https://muon-lite.up.railway.app';
-const DEFAULT_MODEL = 'openai/gpt-5.1';
+const DEFAULT_MODEL = 'openai/gpt-4o';
 const DEMO_KEY = 'REDACTED-WAS-DEMO-KEY';
 
 async function init() {

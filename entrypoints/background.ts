@@ -209,11 +209,119 @@ function serialized<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 const DEFAULT_PROXY_URL = 'https://muon-lite.up.railway.app';
-// Upgraded from gpt-4o to gpt-5.1 for the best available vision accuracy.
-// gpt-4o was missing subtle background luxury (e.g. Lambo in shot but not
-// the focus). gpt-5.1 is OpenAI's flagship and reads scenes far more
-// reliably. Verified working against the proxy with clean image classification.
-const DEFAULT_MODEL = 'openai/gpt-5.1';
+// Back to gpt-4o for speed. gpt-5.1 is technically smarter but it's a
+// reasoning model (slower) and the long taxonomy prompt was confusing it.
+// gpt-4o + dramatically shorter mode-specific prompts = faster AND more
+// accurate (less to confuse the model). ~$0.005/call.
+const DEFAULT_MODEL = 'openai/gpt-4o';
+
+// Mode-specific prompts — focused yes/no instead of the giant taxonomy.
+// Returns `{category, matches_mode, confidence, reason}`. category is
+// informational (used by Auto Scroll for adaptive duration).
+const MODE_PROMPTS: Record<string, string> = {
+  larp: `You classify TikTok videos for a "LARP" filter — luxury / wealth flex content.
+
+Look at the attached frames. Is there any visible wealth in any frame? Examples:
+- Luxury car (Lambo, Ferrari, McLaren, Bentley, Rolls Royce, Porsche, G-Wagon) — even in background
+- Luxury watch (Rolex, Patek, AP, Richard Mille) — wrist shot or close-up
+- Cash visible (stacks, fans, money on table, counting money)
+- Designer items (Birkin, LV monogram, Hermes, Chanel, Gucci)
+- Mansion / penthouse interior (marble, gold, infinity pool)
+- Private jet (sleek business aircraft like Gulfstream — NOT small prop planes or commercial cabins)
+- Gold chains, diamond jewelry
+- Andrew Tate / Tristan Tate / Iman Gadzhi on screen
+
+CASH = always larp, confidence 0.9+. Be GENEROUS — if you see wealth, it's larp.
+
+NOT larp: talking head with no luxury visible, normal apartment, finance education charts, regular car review.
+
+Output JSON only: {"category": "larp" or "other", "matches_mode": boolean, "confidence": 0-1, "reason": "5 words"}`,
+
+  brain_rot: `You classify TikTok videos for a "Brain Rot" filter — animated / AI / edited slop.
+
+Look at the attached frames. Is the visual style animated, AI-generated, or stitched-together slop? Examples:
+- Cartoon characters (Family Guy, Peter Griffin, SpongeBob, Simpsons, Rick & Morty, anime)
+- AI-generated talking characters or AI voiceover narration
+- Skibidi Toilet content
+- Split-screen with game footage underneath (Subway Surfers, Minecraft parkour, soap cutting)
+- Phonk / bass-music edits with anime or sigma slow-mo poses
+- Text-over-game-footage videos
+- Sigma male montages, gigachad edits
+- Andrew Tate edits with phonk
+
+NOT brain rot: real people just being themselves (dancing, talking, vlogging), real animals, genuine comedy with punchline.
+
+THE TEST: animated / AI / edited / game-footage / slop? → brain_rot. Real person doing real things? → other.
+
+Output JSON only: {"category": "brain_rot" or "other", "matches_mode": boolean, "confidence": 0-1, "reason": "5 words"}`,
+
+  cooking: `You classify TikTok videos for a "Cooking" filter — actual recipe and cooking technique.
+
+Look at the attached frames. Does the video SHOW actual cooking happening? Examples:
+- Recipe steps being demonstrated, ingredient prep, cooking technique
+- Someone using a stove, oven, knife, mixer, whisk
+- Food being assembled, baked, fried, plated mid-cooking
+
+NOT cooking: food reviews, eating videos, restaurant b-roll, plated finished food, anyone just talking about food without cooking it.
+
+THE TEST: do you see someone actually cooking with technique/steps? → cooking. Just food visible? → other.
+
+Output JSON only: {"category": "cooking" or "other", "matches_mode": boolean, "confidence": 0-1, "reason": "5 words"}`,
+
+  laugh: `You classify TikTok videos for a "Laugh" filter — actually funny comedy.
+
+Look at the attached frames + caption. Is this genuinely funny — sketch with setup/punchline, witty edit, absurd humor, clever timing?
+
+NOT laugh: cringe content played straight, mean pranks, generic POV memes without a joke, awkward situations.
+
+THE TEST: would a normal person genuinely laugh? → comedy. Just trying to be funny? → other.
+
+Output JSON only: {"category": "comedy" or "other", "matches_mode": boolean, "confidence": 0-1, "reason": "5 words"}`,
+
+  fitness: `You classify TikTok videos for a "Fitness" filter — gym + physique content.
+
+Look at the attached frames. Does the video show:
+- Shirtless / sports-bra physique flex, pump check, body reveal
+- Lifting demonstration (deadlift, squat, bench press, OHP) with form or aesthetic focus
+- Bodybuilding pose, physique transformation
+- Aesthetic gym content (slow-mo lifting with bass music, body in motion)
+
+NOT fitness: gym vlogs that don't show exercise/physique, fashion at the gym (those are baddies if female focus), Tate-style flex with money/cars (that's larp).
+
+Output JSON only: {"category": "fitness" or "other", "matches_mode": boolean, "confidence": 0-1, "reason": "5 words"}`,
+
+  baddies: `You classify TikTok videos for a "Baddies" filter — attractive women aesthetic content.
+
+Look at the attached frames. Common sense: is there an attractive woman as the focus of the video (showing face or body with intentional styled presentation)?
+
+- Gym girls (woman in workout fit, mirror selfie, doing exercise with aesthetic focus)
+- Fashion / OOTD / fit check / GRWM videos centered on a woman
+- Glam transformations, glow-ups, "that girl" / "clean girl" aesthetic
+- Slow-mo walks, hair flips, model poses, lip-sync clips
+- Mirror selfies, pool/beach content, bedroom photoshoot vibes
+
+NOT baddies: man on screen, animated content, group/crowd with no focused woman, genuine makeup TUTORIAL with instruction, regular cooking with woman in background.
+
+THE TEST: woman whose presentation is meant to be looked at? → baddies. No? → other.
+
+Output JSON only: {"category": "baddies" or "other", "matches_mode": boolean, "confidence": 0-1, "reason": "5 words"}`,
+
+  custom: `You classify a TikTok video against a USER DESCRIPTION provided in the user message.
+
+Look at the attached frames + caption. Does the video genuinely match the user's description? Be reasonably strict — surface keyword overlap is NOT a match; the video itself must be about the described topic.
+
+If confidence is below 0.65, return matches_mode=false.
+
+Output JSON only: {"category": "matches_user" or "other", "matches_mode": boolean, "confidence": 0-1, "reason": "5 words"}`
+};
+
+// Used for Auto Scroll (no filter, just adaptive watch duration per category).
+const AUTO_SCROLL_PROMPT = `You categorize TikTok videos for adaptive watch duration. Return one of:
+brain_rot, food_porn, comedy, cooking, fitness, larp, baddies, educational, wholesome, wind_down, motivational, news_politics, drama_storytime, other
+
+Look at the attached frames + caption. Pick the closest single category.
+
+Output JSON only: {"category": "<one of above>", "confidence": 0-1, "reason": "5 words"}`;
 
 async function classifyWithClaude(args: {
   frames: string[];
@@ -230,22 +338,20 @@ async function classifyWithClaude(args: {
   const stripPrefix = (dataUrl: string) =>
     dataUrl.replace(/^data:image\/jpeg;base64,/, '');
 
+  // Pick the focused system prompt for this mode. Fall back to auto-scroll
+  // generic prompt for any unrecognized mode (e.g. 'other').
+  const systemPrompt = MODE_PROMPTS[args.mode] || AUTO_SCROLL_PROMPT;
+
   const customLine = args.mode === 'custom' && args.customDescription
-    ? `CUSTOM_DESCRIPTION: ${args.customDescription}\n`
+    ? `USER DESCRIPTION: ${args.customDescription}\n\n`
     : '';
 
-  const frameLine = (args.frames?.length || 0) > 0
-    ? `The ${args.frames.length} attached image(s) are video frames captured at 0.3s, 0.9s, and 1.5s into the playback.`
-    : `No frames attached — classify based on text metadata only.`;
-
   const userText =
-    `MODE: ${args.mode}\n` +
     customLine +
-    `CAPTION: "${args.caption || 'none'}"\n` +
-    `HASHTAGS: ${args.hashtags?.join(' ') || 'none'}\n` +
-    `SOUND: "${args.sound || 'none'}"\n` +
-    `CREATOR: "${args.creator || 'unknown'}"\n\n` +
-    `${frameLine} Classify the video per the schema in the system prompt. Return ONLY the JSON object, no prose, no markdown fences.`;
+    `Caption: ${args.caption || '(none)'}\n` +
+    `Hashtags: ${args.hashtags?.join(' ') || '(none)'}\n` +
+    `Creator: ${args.creator || '(unknown)'}\n\n` +
+    `${args.frames.length} video frame${args.frames.length === 1 ? '' : 's'} attached. Classify per the system prompt. JSON only.`;
 
   // Anthropic Messages API format. LiteLLM proxy at muon-lite accepts this directly.
   // When frames array is empty (text-only classification during training phase),
@@ -271,9 +377,9 @@ async function classifyWithClaude(args: {
     },
     body: JSON.stringify({
       model: args.model || DEFAULT_MODEL,
-      max_tokens: 220,
+      max_tokens: 120, // short focused responses — JSON only
       temperature: 0, // deterministic — same input always gets same classification
-      system: SYSTEM_PROMPT,
+      system: systemPrompt,
       messages: [{
         role: 'user',
         content: [...imageBlocks, { type: 'text', text: userText }]
