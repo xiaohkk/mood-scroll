@@ -43,7 +43,11 @@ export default defineContentScript({
     const MATCH_WINDOW = 10;
     const STABLE_ENTER_THRESHOLD = 0.6;  // 60% matches → tuned
     const STABLE_EXIT_THRESHOLD = 0.4;   // drops below 40% → re-train
-    const TRAINING_CONFIG = { decisionIntervalMs: 300, likeProbability: 1.0, useFrames: false };
+    // useFrames=true in BOTH phases. The 1-frame Training shortcut caused
+    // "skip other" floods — many TikToks open with a 300-800ms black/title
+    // card before the real subject appears, so a single frame at t=0 missed
+    // the actual content. 3 frames over ~1.4s catches it reliably.
+    const TRAINING_CONFIG = { decisionIntervalMs: 300, likeProbability: 1.0, useFrames: true };
     const STABLE_CONFIG = { decisionIntervalMs: 2500, likeProbability: 0.3, useFrames: true };
     const tuning = () => phase === 'training' ? TRAINING_CONFIG : STABLE_CONFIG;
 
@@ -1489,7 +1493,11 @@ export default defineContentScript({
 
     async function captureFramesOverTime(video: HTMLVideoElement): Promise<string[]> {
       const frames: string[] = [];
-      const delays = [0, 600, 600];
+      // Wait 400ms BEFORE the first frame so we skip past the title
+      // card / black-intro that most TikToks open with. Then 500ms gaps
+      // for variety. Total capture window: 400ms → 900ms → 1400ms.
+      // This dramatically reduces "skip other" from blank opening frames.
+      const delays = [400, 500, 500];
       const srcAtStart = video.currentSrc;
       for (const delay of delays) {
         if (delay > 0) await new Promise(r => setTimeout(r, delay));
