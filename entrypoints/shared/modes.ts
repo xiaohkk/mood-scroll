@@ -1,12 +1,28 @@
+// `matches` = strict categories that fully qualify (used in Tuned phase).
+// `broadMatches` = broader content cluster (used in Training phase to push
+//                  TikTok's algorithm toward the niche via related-content
+//                  engagement). Once locked in, we narrow to `matches`.
 export const MODES = [
-  { id: 'auto_scroll', emoji: '⏩',   label: 'Auto Scroll', matches: [] },
-  { id: 'brain_rot',   emoji: '🧠💀', label: 'Brain Rot',   matches: ['brain_rot', 'food_porn'] },
-  { id: 'cooking',     emoji: '🍳',   label: 'Cooking',     matches: ['cooking'] },
-  { id: 'laugh',       emoji: '😂',   label: 'Laugh',       matches: ['comedy'] },
-  { id: 'larp',        emoji: '💎',   label: 'LARP',        matches: ['larp'] },
-  { id: 'fitness',     emoji: '💪',   label: 'Fitness',     matches: ['fitness'] },
-  { id: 'baddies',     emoji: '💅',   label: 'Baddies',     matches: ['baddies'] },
-  { id: 'custom',      emoji: '✨',   label: 'Custom',      matches: [] }
+  { id: 'auto_scroll', emoji: '⏩',   label: 'Auto Scroll', matches: [], broadMatches: [] },
+  { id: 'brain_rot',   emoji: '🧠💀', label: 'Brain Rot',
+    matches: ['brain_rot', 'food_porn'],
+    broadMatches: ['brain_rot', 'food_porn', 'comedy'] },
+  { id: 'cooking',     emoji: '🍳',   label: 'Cooking',
+    matches: ['cooking'],
+    broadMatches: ['cooking', 'food_porn'] },
+  { id: 'laugh',       emoji: '😂',   label: 'Laugh',
+    matches: ['comedy'],
+    broadMatches: ['comedy', 'brain_rot'] },
+  { id: 'larp',        emoji: '💎',   label: 'LARP',
+    matches: ['larp'],
+    broadMatches: ['larp', 'motivational', 'fitness'] },
+  { id: 'fitness',     emoji: '💪',   label: 'Fitness',
+    matches: ['fitness'],
+    broadMatches: ['fitness', 'motivational', 'baddies'] },
+  { id: 'baddies',     emoji: '💅',   label: 'Baddies',
+    matches: ['baddies'],
+    broadMatches: ['baddies', 'fitness'] },
+  { id: 'custom',      emoji: '✨',   label: 'Custom',     matches: [], broadMatches: [] }
 ] as const;
 
 export type ModeId = typeof MODES[number]['id'];

@@ -962,11 +962,11 @@ export default defineContentScript({
       const pct = recentMatches.length ? Math.round((matchedCount / recentMatches.length) * 100) : 0;
       if (phase === 'training') {
         ph.classList.remove('stable');
-        label.textContent = 'Training the algo';
+        label.textContent = 'Training (broad cluster)';
         stat.textContent = `${matchedCount}/${recentMatches.length || 0} matched`;
       } else {
         ph.classList.add('stable');
-        label.textContent = `Tuned · ${pct}% on-target`;
+        label.textContent = `Tuned · strict ${pct}%`;
         stat.textContent = 'auto pace';
       }
       fill.style.width = `${pct}%`;
@@ -1250,13 +1250,17 @@ export default defineContentScript({
         }
 
         const mode = MODES.find(m => m.id === currentMode);
-        const modeMatches: readonly string[] = mode?.matches ?? [];
+        // TWO-PHASE MATCHING:
+        // - Training phase: use BROAD cluster (e.g. Cooking matches food_porn too).
+        //   This signals to TikTok we want the cluster, pulling related content faster.
+        // - Stable phase ("locked in"): narrow to STRICT matches only.
+        const useStrictMatches = phase === 'stable';
+        const modeMatches: readonly string[] = useStrictMatches
+          ? (mode?.matches as readonly string[]) ?? []
+          : (mode?.broadMatches as readonly string[]) ?? (mode?.matches as readonly string[]) ?? [];
         // For FIXED modes, trust the locally-defined category mapping — NEVER
-        // trust the API's matches_mode field, which has been observed to be
-        // wrong (returning matches_mode=true while category clearly doesn't
-        // match the user's mode). For CUSTOM mode we have no fixed mapping,
-        // so the API's matches_mode (which compares against CUSTOM_DESCRIPTION)
-        // is the only signal we have.
+        // trust the API's matches_mode field. For CUSTOM mode we have no fixed
+        // mapping, so the API's matches_mode is the only signal we have.
         const matches_mode = currentMode === 'custom'
           ? (typeof decision.matches_mode === 'boolean' ? decision.matches_mode : false)
           : modeMatches.includes(decision.category);
