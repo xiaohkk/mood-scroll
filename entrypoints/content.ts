@@ -795,12 +795,18 @@ export default defineContentScript({
 
       const resetBtn = shadow.getElementById('ms-reset-btn');
       if (!resetBtn) {
-        console.warn('[MoodScroll] Reset button NOT FOUND in shadow DOM — old version still running? Hard-refresh TikTok (⌘+Shift+R).');
+        console.warn('[MoodScroll] Reset button NOT FOUND — old content script still running? Close + reopen the TikTok tab.');
       }
       if (resetBtn) {
-        resetBtn.addEventListener('click', async () => {
+        console.log('[MoodScroll] Reset button wired up ✓');
+        resetBtn.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          ev.preventDefault();
           console.log('[MoodScroll] 🔄 Reset Algo clicked');
-          // 1. Reset Mood Scroll's internal training state
+          // Pause classifications by clearing the current mode — prevents stats
+          // from re-incrementing instantly after reset. User must re-pick a mode.
+          const prevMode = currentMode;
+          currentMode = null;
           recentMatches.length = 0;
           phase = 'training';
           autoAdvanceAt = 0;
@@ -808,15 +814,17 @@ export default defineContentScript({
           lastClassifiedVideoSrc = null;
           likedVideoSrcs.clear();
           likeTimestamps.length = 0;
+          await chrome.storage.local.set({ currentMode: null }).catch(() => {});
           const sessionRes = await chrome.runtime.sendMessage({ type: 'reset_session' }).catch((e: any) => ({ error: String(e) }));
           console.log('[MoodScroll] session cleared:', sessionRes);
           updatePhaseUI();
           updateOverlayStats();
-          flashDecision(true, 'algo reset');
+          updateOverlayState();
+          flashDecision(true, '🔄 RESET');
           showResetBanner();
-          // 2. Open TikTok's content preferences so user can click "Refresh For You feed"
+          // Open TikTok content preferences in a new tab — user clicks "Refresh For You" there
           const settingsRes = await chrome.runtime.sendMessage({ type: 'open_tiktok_settings' }).catch((e: any) => ({ error: String(e) }));
-          console.log('[MoodScroll] TikTok settings tab:', settingsRes);
+          console.log('[MoodScroll] TikTok settings tab opened:', settingsRes, '(was mode:', prevMode, ')');
         });
       }
 

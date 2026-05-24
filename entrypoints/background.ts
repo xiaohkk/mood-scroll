@@ -440,6 +440,21 @@ export default defineBackground(() => {
     if (details.reason === 'install') {
       chrome.runtime.openOptionsPage();
     }
+    // On install AND update: reload any open TikTok tabs so the latest
+    // content script kicks in immediately. Without this, refreshing the
+    // extension at chrome://extensions leaves stale code running on
+    // already-open tabs — new buttons/handlers won't work until manual
+    // page refresh. This is the #1 source of "X button isn't working"
+    // confusion.
+    if (details.reason === 'install' || details.reason === 'update') {
+      chrome.tabs.query({ url: 'https://www.tiktok.com/*' }, (tabs) => {
+        tabs.forEach(tab => {
+          if (tab.id !== undefined) {
+            chrome.tabs.reload(tab.id).catch(() => {});
+          }
+        });
+      });
+    }
   });
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
