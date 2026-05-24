@@ -1126,10 +1126,20 @@ export default defineContentScript({
             // can visually verify the text-based hint. During TRAINING we send
             // 1 quick-capture frame (~5ms + ~700ms API). In STABLE we send 3
             // frames over 1.2s for full accuracy.
-            const useMultipleFrames = tuning().useFrames || currentMode === 'custom';
+            // ALWAYS_VISION_MODES + custom + stable phase get 3 frames over
+            // ~1.2s for full context (catches background luxury that appears
+            // later in the clip). Training-phase fixed modes still get 1 frame.
+            const useMultipleFrames = tuning().useFrames
+              || currentMode === 'custom'
+              || ALWAYS_VISION_MODES.has(currentMode || '');
             let frames: string[] = [];
             if (useMultipleFrames) {
               frames = await captureFramesOverTime(video);
+              // Fallback to single-frame retry if multi-frame returned nothing
+              if (frames.length === 0) {
+                const single = await captureSingleFrame(video);
+                if (single) frames = [single];
+              }
             } else {
               const single = await captureSingleFrame(video);
               if (single) frames = [single];
@@ -1303,16 +1313,18 @@ export default defineContentScript({
     // Single-frame capture with retry — tries up to 3 times waiting briefly
     // between attempts because TikTok preloads videos with readyState 0/1
     // and we need to wait for it to reach readyState >= 2 to drawImage.
+    // Bumped resolution to 480x854 (was 360x640) so small background objects
+    // like cars / watches stay readable to gpt-4o.
     function captureSingleFrameSync(video: HTMLVideoElement): string | null {
       if (video.readyState < 2) return null;
       try {
         const canvas = document.createElement('canvas');
-        canvas.width = 360;
-        canvas.height = 640;
+        canvas.width = 480;
+        canvas.height = 854;
         const ctx = canvas.getContext('2d');
         if (!ctx) return null;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        return canvas.toDataURL('image/jpeg', 0.6);
+        return canvas.toDataURL('image/jpeg', 0.75);
       } catch {
         return null;
       }
@@ -1340,12 +1352,12 @@ export default defineContentScript({
         if (video.currentSrc !== srcAtStart) break;
         try {
           const canvas = document.createElement('canvas');
-          canvas.width = 360;
-          canvas.height = 640;
+          canvas.width = 480;
+          canvas.height = 854;
           const ctx = canvas.getContext('2d');
           if (!ctx) continue;
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          frames.push(canvas.toDataURL('image/jpeg', 0.6));
+          frames.push(canvas.toDataURL('image/jpeg', 0.75));
         } catch (err) {
           console.warn('[MoodScroll] frame capture failed:', err);
         }

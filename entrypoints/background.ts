@@ -138,7 +138,9 @@ Category definitions — be STRICT. Each has an "IS" definition and explicit "NO
   NOT: generic finance advice. NOT career advice. NOT crypto/stock trading. NOT corporate office vlogs. NOT generic "side hustle" videos.
 
 - larp:
-  ABSOLUTE OVERRIDE RULE: If you see ANY VISIBLE CASH in the frame — stacks of bills, money fan/spread, someone counting money, money rain, money gun, briefcase of cash, money on a table in front of someone, money being thrown — the answer is LARP. Always. Without exception. Confidence 0.9 minimum. Do not even consider any other category. Cash on screen is the single clearest LARP signal in the entire system.
+  SCAN ALL FRAMES CAREFULLY: You are given up to 3 frames from different points in the video. Examine each one — foreground AND background — for any wealth markers. A luxury car parked behind the subject in one of the frames is still LARP. Don't just look at the main subject; scan the entire frame.
+
+  ABSOLUTE OVERRIDE RULE: If you see ANY VISIBLE CASH in any frame — stacks of bills, money fan/spread, someone counting money, money rain, money gun, briefcase of cash, money on a table in front of someone, money being thrown — the answer is LARP. Always. Without exception. Confidence 0.9 minimum. Do not even consider any other category. Cash on screen is the single clearest LARP signal in the entire system.
 
   THE RULE — one rule, very simple: scan the visible frame for wealth markers. If you spot ANY of them — anywhere in the shot, foreground or background, briefly or prominently — the answer is larp. Do not analyze what the people are doing or saying. The video's "intent" doesn't matter. The only question: is there VISIBLE WEALTH in the frame?
 
