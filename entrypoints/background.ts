@@ -352,54 +352,85 @@ async function classifyWithClaude(args: {
     `Creator: ${args.creator || '(unknown)'}\n\n` +
     `${args.frames.length} video frame${args.frames.length === 1 ? '' : 's'} attached. Classify per the system prompt. JSON only.`;
 
-  // OpenAI chat-completions format with vision support. Each frame becomes
-  // an image_url part with a base64 data URL. The user's apiKey is sent
-  // as a Bearer token.
-  // Auto-detects if proxyUrl points to a LiteLLM-style proxy (muon-lite)
-  // by checking for /v1/messages support — if the URL is api.openai.com
-  // OR any custom URL, we use OpenAI's /v1/chat/completions.
-  const imageParts = (args.frames || []).map(frame => ({
-    type: 'image_url' as const,
-    image_url: { url: frame.startsWith('data:') ? frame : `data:image/jpeg;base64,${frame}` }
-  }));
-
   const baseUrl = (args.proxyUrl || DEFAULT_PROXY_URL).replace(/\/+$/, '');
-  const url = `${baseUrl}/v1/chat/completions`;
+  const modelToUse = args.model || DEFAULT_MODEL;
 
-  const res = await fetch(url, {
+  // Auto-detect API format by URL. OpenAI direct → use chat-completions.
+  // Anything else (muon-lite, any LiteLLM-style Anthropic proxy) → use
+  // the Anthropic /v1/messages format with x-api-key auth.
+  const useOpenAIFormat = /api\.openai\.com/i.test(baseUrl);
+
+  if (useOpenAIFormat) {
+    const imageParts = (args.frames || []).map(frame => ({
+      type: 'image_url' as const,
+      image_url: { url: frame.startsWith('data:') ? frame : `data:image/jpeg;base64,${frame}` }
+    }));
+    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'authorization': `Bearer ${args.apiKey}`
+      },
+      body: JSON.stringify({
+        model: modelToUse,
+        max_tokens: 120,
+        temperature: 0,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: [...imageParts, { type: 'text', text: userText }] }
+        ]
+      })
+    });
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(`OpenAI ${res.status}: ${errorText.slice(0, 300)}`);
+    }
+    const data = await res.json();
+    const text = data?.choices?.[0]?.message?.content;
+    if (!text) throw new Error('OpenAI returned no text: ' + JSON.stringify(data).slice(0, 200));
+    const cleaned = text.replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
+    try { return JSON.parse(cleaned); }
+    catch (err) { throw new Error('parse_failed: ' + cleaned.slice(0, 200)); }
+  }
+
+  // Anthropic format path — used by muon-lite proxy and any other
+  // LiteLLM-style endpoint set in the proxy URL field.
+  const imageBlocks = (args.frames || []).map(frame => ({
+    type: 'image' as const,
+    source: {
+      type: 'base64' as const,
+      media_type: 'image/jpeg' as const,
+      data: stripPrefix(frame)
+    }
+  }));
+  const res = await fetch(`${baseUrl}/v1/messages`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'authorization': `Bearer ${args.apiKey}`
+      'x-api-key': args.apiKey,
+      'anthropic-version': '2023-06-01'
     },
     body: JSON.stringify({
-      model: args.model || DEFAULT_MODEL,
+      model: modelToUse,
       max_tokens: 120,
       temperature: 0,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: [...imageParts, { type: 'text', text: userText }] }
-      ]
+      system: systemPrompt,
+      messages: [{ role: 'user', content: [...imageBlocks, { type: 'text', text: userText }] }]
     })
   });
-
   if (!res.ok) {
     const errorText = await res.text();
-    throw new Error(`OpenAI ${res.status}: ${errorText.slice(0, 300)}`);
+    throw new Error(`Claude ${res.status}: ${errorText.slice(0, 300)}`);
   }
-
   const data = await res.json();
-  // OpenAI response: { choices: [{ message: { content: '...' } }] }
-  const text = data?.choices?.[0]?.message?.content;
-  if (!text) {
-    throw new Error('OpenAI returned no text: ' + JSON.stringify(data).slice(0, 200));
-  }
+  const textBlock = Array.isArray(data?.content)
+    ? data.content.find((b: any) => b?.type === 'text')
+    : null;
+  const text = textBlock?.text;
+  if (!text) throw new Error('Claude returned no text: ' + JSON.stringify(data).slice(0, 200));
   const cleaned = text.replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
-  try {
-    return JSON.parse(cleaned);
-  } catch (err) {
-    throw new Error('parse_failed: ' + cleaned.slice(0, 200));
-  }
+  try { return JSON.parse(cleaned); }
+  catch (err) { throw new Error('parse_failed: ' + cleaned.slice(0, 200)); }
 }
 
 async function checkCreatorMemo(creator: string): Promise<{ category: string; confidence: number } | null> {
