@@ -477,6 +477,15 @@ export default defineBackground(() => {
         .catch(err => sendResponse({ ok: false, error: String(err?.message ?? err) }));
       return true;
     }
+    if (msg.type === 'open_tiktok_settings') {
+      // TikTok's "Refresh your For You feed" lives in Content Preferences.
+      // Opens in a new tab so the user can click the refresh button themselves
+      // (requires login). The pre-checked path: Settings → Content Preferences.
+      chrome.tabs.create({ url: 'https://www.tiktok.com/setting/content-preferences' })
+        .then(() => sendResponse({ ok: true }))
+        .catch(err => sendResponse({ ok: false, error: String(err?.message ?? err) }));
+      return true;
+    }
     if (msg.type === 'sidekick_on') {
       handleSidekick(true, msg.screenW, msg.screenH)
         .then(r => sendResponse(r))

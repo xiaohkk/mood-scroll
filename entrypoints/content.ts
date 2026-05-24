@@ -642,7 +642,7 @@ export default defineContentScript({
   }
 
   /* ---------- ACTIONS ---------- */
-  .ms-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+  .ms-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-bottom: 5px; }
   .ms-stop, .ms-receipt-btn {
     padding: 8px;
     background: rgba(255,255,255,0.04); color: var(--text-secondary);
@@ -655,6 +655,18 @@ export default defineContentScript({
   .ms-stop:hover {
     background: rgba(248,113,113,0.09); color: var(--danger);
     border-color: rgba(248,113,113,0.25);
+  }
+  .ms-reset-btn {
+    width: 100%; padding: 8px;
+    background: rgba(255,255,255,0.04); color: var(--text-secondary);
+    border: 0.5px solid var(--border-subtle); border-radius: 8px;
+    cursor: pointer; font-family: inherit;
+    font-size: 11px; font-weight: 500; letter-spacing: -0.005em;
+    transition: background 0.18s var(--ease), color 0.18s var(--ease), border-color 0.18s var(--ease);
+  }
+  .ms-reset-btn:hover {
+    background: rgba(255,217,90,0.08); color: var(--accent);
+    border-color: rgba(255,217,90,0.25);
   }
 </style>
 <button class="ms-toggle" id="ms-toggle" title="Mood Scroll — click to open"><span class="ms-pulse"></span><span id="ms-toggle-icon">✨</span></button>
@@ -703,6 +715,7 @@ export default defineContentScript({
     <button class="ms-receipt-btn" id="ms-receipt-btn">📊 Receipt</button>
     <button class="ms-stop" id="ms-stop">⏹ Stop</button>
   </div>
+  <button class="ms-reset-btn" id="ms-reset-btn" title="Reset everything: opens TikTok content preferences in a new tab (where you can 'Refresh your For You feed') and clears Mood Scroll's training history so the next mode locks in faster.">🔄 Reset algo</button>
 </div>
       `;
     }
@@ -773,6 +786,26 @@ export default defineContentScript({
       receiptBtn.addEventListener('click', () => {
         chrome.runtime.sendMessage({ type: 'open_receipt' }).catch(() => {});
       });
+
+      const resetBtn = shadow.getElementById('ms-reset-btn');
+      if (resetBtn) {
+        resetBtn.addEventListener('click', async () => {
+          // 1. Reset Mood Scroll's internal training state
+          recentMatches.length = 0;
+          phase = 'training';
+          autoAdvanceAt = 0;
+          watchedVideoLastTime = 0;
+          lastClassifiedVideoSrc = null;
+          likedVideoSrcs.clear();
+          likeTimestamps.length = 0;
+          await chrome.runtime.sendMessage({ type: 'reset_session' }).catch(() => {});
+          updatePhaseUI();
+          updateOverlayStats();
+          flashDecision(true, 'algo reset');
+          // 2. Open TikTok's content preferences so user can click "Refresh For You feed"
+          chrome.runtime.sendMessage({ type: 'open_tiktok_settings' }).catch(() => {});
+        });
+      }
 
       const sidekickBtn = shadow.getElementById('ms-sidekick-btn') as HTMLButtonElement;
       if (sidekickBtn) {
