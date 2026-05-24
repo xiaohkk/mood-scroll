@@ -980,6 +980,21 @@ export default defineContentScript({
       setTimeout(() => banner.classList.remove('show'), 4000);
     }
 
+    function showApiKeyMissingBanner() {
+      if (!shadow) return;
+      const banner = shadow.getElementById('ms-locked-banner');
+      if (!banner) return;
+      const title = banner.querySelector('.ms-locked-title') as HTMLElement;
+      const sub = banner.querySelector('.ms-locked-sub') as HTMLElement;
+      const icon = banner.querySelector('.ms-locked-icon') as HTMLElement;
+      icon.textContent = '🔑';
+      title.textContent = 'ADD YOUR API KEY';
+      sub.innerHTML = 'Mood Scroll needs your own OpenAI key to classify videos.<br><br>Click the extension icon in Chrome\'s toolbar → Options → paste your <code>sk-...</code> key → Save.';
+      banner.classList.add('show');
+      // Stays up until the user dismisses by clicking outside or picking a mode again
+      setTimeout(() => banner.classList.remove('show'), 12000);
+    }
+
     function showResetBanner() {
       if (!shadow) return;
       const banner = shadow.getElementById('ms-locked-banner');
@@ -1301,7 +1316,16 @@ export default defineContentScript({
               return;
             }
             if (result?.error) {
-              console.warn('[MoodScroll] Gemini error:', result.error);
+              console.warn('[MoodScroll] classify error:', result.error);
+              // Surface no-API-key errors visibly so users don't think the
+              // extension is broken. Pauses the current mode and shows a
+              // persistent banner with a button to open the options page.
+              if (typeof result.error === 'string' && /api key/i.test(result.error)) {
+                showApiKeyMissingBanner();
+                currentMode = null;
+                chrome.storage.local.set({ currentMode: null }).catch(() => {});
+                updateOverlayState();
+              }
               isClassifying = false;
               return;
             }
