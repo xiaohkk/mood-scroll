@@ -1488,25 +1488,67 @@ export default defineContentScript({
         // Scope the like button to the current video's card to avoid liking a neighbor.
         const card = video.closest(CONFIG.itemSelector) as HTMLElement | null;
         const scope: ParentNode = card || document;
-        let button: HTMLButtonElement | null = null;
         const likeIcon = scope.querySelector<HTMLElement>(CONFIG.likeIconSelector);
-        if (likeIcon) button = likeIcon.closest('button');
-        if (!button) button = scope.querySelector<HTMLButtonElement>(CONFIG.likeAriaSelector);
-        if (!button) {
-          console.log('[MoodScroll] like button not found');
-          return;
-        }
-        // Check if already liked. TikTok flips the aria-label from "Like video" to "Unlike".
-        const labelBefore = (button.getAttribute('aria-label') || '').toLowerCase();
-        if (labelBefore.startsWith('unlike') || button.getAttribute('aria-pressed') === 'true') {
+        const button = likeIcon?.closest('button')
+          || scope.querySelector<HTMLButtonElement>(CONFIG.likeAriaSelector);
+        // If already liked, just record it and bail
+        const labelBefore = (button?.getAttribute('aria-label') || '').toLowerCase();
+        if (labelBefore.startsWith('unlike') || button?.getAttribute('aria-pressed') === 'true') {
           likedVideoSrcs.add(videoSrc);
           return;
         }
-        button.click();
+        // PRIMARY: native double-tap gesture on the video. TikTok's React handler
+        // detects two clicks within ~300ms as a like — and shows the floating
+        // heart animation on the video, just like a real user double-tap.
+        const doubleClicked = doubleTapVideo(video);
+        // FALLBACK: also click the like button. Even if double-tap fires the
+        // like, clicking the button is idempotent (TikTok ignores second like).
+        // If double-tap didn't fire (e.g. video element changed), button click
+        // saves us.
+        let buttonClicked = false;
+        if (button) {
+          button.click();
+          buttonClicked = true;
+        }
         likedVideoSrcs.add(videoSrc);
         likeTimestamps.push(Date.now());
-        console.log('[MoodScroll] ❤️ liked match');
+        console.log(`[MoodScroll] ❤️ liked match (dblclick=${doubleClicked}, btn=${buttonClicked})`);
       }, delay);
+    }
+
+    // Native double-tap gesture on the video element. TikTok shows the
+    // floating heart and registers a like — same signal as a real user
+    // double-tapping a video they want to see more of.
+    function doubleTapVideo(video: HTMLVideoElement): boolean {
+      try {
+        const rect = video.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        const opts: MouseEventInit = {
+          bubbles: true,
+          cancelable: true,
+          clientX: cx,
+          clientY: cy,
+          button: 0,
+          buttons: 1,
+          view: window
+        };
+        // Burst 1
+        video.dispatchEvent(new MouseEvent('mousedown', opts));
+        video.dispatchEvent(new MouseEvent('mouseup', opts));
+        video.dispatchEvent(new MouseEvent('click', opts));
+        // Burst 2, ~80ms later — well within TikTok's double-click window
+        setTimeout(() => {
+          video.dispatchEvent(new MouseEvent('mousedown', opts));
+          video.dispatchEvent(new MouseEvent('mouseup', opts));
+          video.dispatchEvent(new MouseEvent('click', opts));
+          video.dispatchEvent(new MouseEvent('dblclick', opts));
+        }, 80);
+        return true;
+      } catch (err) {
+        console.warn('[MoodScroll] double-tap failed:', err);
+        return false;
+      }
     }
   }
 });
