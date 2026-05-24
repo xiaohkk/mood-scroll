@@ -209,12 +209,11 @@ function serialized<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 const DEFAULT_PROXY_URL = 'https://muon-lite.up.railway.app';
-// Upgraded from gpt-4o-mini to gpt-4o (full) for the best vision accuracy.
-// gpt-4o-mini was hallucinating on edge cases ("man in car" → baddies, etc).
-// gpt-4o is ~2-3x more expensive (~$0.005/call vs $0.002), but accuracy
-// matters more than budget for this product. $80 / $0.005 = ~16,000 calls
-// — still plenty for hours of curated TikTok per day.
-const DEFAULT_MODEL = 'openai/gpt-4o';
+// Upgraded from gpt-4o to gpt-5.1 for the best available vision accuracy.
+// gpt-4o was missing subtle background luxury (e.g. Lambo in shot but not
+// the focus). gpt-5.1 is OpenAI's flagship and reads scenes far more
+// reliably. Verified working against the proxy with clean image classification.
+const DEFAULT_MODEL = 'openai/gpt-5.1';
 
 async function classifyWithClaude(args: {
   frames: string[];

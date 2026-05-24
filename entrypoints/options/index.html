@@ -90,12 +90,14 @@
   <div class="field">
     <label for="model">Model</label>
     <select id="model">
-      <option value="openai/gpt-4o">gpt-4o · default (best vision · ~$0.005/call)</option>
-      <option value="openai/gpt-4o-mini">gpt-4o-mini · cheaper (~$0.002/call · misclassifies edge cases)</option>
-      <option value="gpt-4.1-nano">gpt-4.1-nano · cheapest (~$0.0001/call · least accurate)</option>
-      <option value="sonnet-3.7">Claude sonnet-3.7 · alternative</option>
+      <option value="openai/gpt-5.1">gpt-5.1 · default (flagship vision · best accuracy)</option>
+      <option value="openai/gpt-5.5-pro">gpt-5.5-pro · premium (most thorough, more expensive)</option>
+      <option value="gemini/gemini-2.5-pro">gemini-2.5-pro · Google flagship</option>
+      <option value="openai/gpt-4o">gpt-4o · previous default</option>
+      <option value="openai/gpt-4o-mini">gpt-4o-mini · cheaper (misclassifies edge cases)</option>
+      <option value="gpt-4.1-nano">gpt-4.1-nano · cheapest (least accurate)</option>
     </select>
-    <div class="hint">gpt-4o gives ~16k classifications for $80 — best accuracy for visual judgment modes (LARP, Baddies, Brain Rot).</div>
+    <div class="hint">gpt-5.1 is the strongest available vision model — best for distinguishing background objects, subtle luxury, animated vs real content.</div>
   </div>
 
   <div class="actions">
