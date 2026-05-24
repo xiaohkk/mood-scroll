@@ -69,18 +69,49 @@ export default defineContentScript({
     function watchDurationFor(category?: string | null): number {
       return WATCH_DURATIONS[category || 'other'] || 6000;
     }
-    // Cap the category-appropriate hold to the video's actual duration so
-    // short clips (3-8s) don't re-loop. Always keep at least 2.5s for the
-    // like to register.
+    // Cap the category-appropriate hold to (video duration * 0.92) so we ALWAYS
+    // advance BEFORE the natural loop point. TikTok videos have loop=true so
+    // .ended never fires — they just restart. We need to beat the loop.
     function holdForVideo(category: string | null | undefined, video: HTMLVideoElement | null): number {
       const base = watchDurationFor(category);
-      const dur = (video?.duration && isFinite(video.duration)) ? Math.floor(video.duration * 1000) : 0;
-      if (dur > 0 && dur < base) {
-        return Math.max(2500, dur - 500);
+      const dur = (video?.duration && isFinite(video.duration) && video.duration > 0)
+        ? Math.floor(video.duration * 1000)
+        : 0;
+      if (dur > 0) {
+        // Always cap to 92% of duration, regardless of base. Never let a video loop.
+        const cap = Math.max(2500, Math.floor(dur * 0.92));
+        return Math.min(base, cap);
       }
       return base;
     }
     let autoAdvanceAt = 0; // when to advance the current matched video
+
+    // Loop watchdog: polls the currently matched video's currentTime. If the
+    // video restarted (currentTime dropped), advance immediately so it never
+    // plays again. Runs every 250ms when there's an active match hold.
+    let watchedVideoLastTime = 0;
+    setInterval(() => {
+      if (autoAdvanceAt === 0 || !currentMode || currentMode === 'auto_scroll') return;
+      const video = findPlayingVideo();
+      if (!video || !video.currentSrc) return;
+      // If currentTime dropped by > 0.5s from last reading, it looped.
+      if (watchedVideoLastTime > 0 && video.currentTime + 0.5 < watchedVideoLastTime) {
+        console.log('[MoodScroll] video looped, advancing immediately');
+        autoAdvanceAt = 0;
+        watchedVideoLastTime = 0;
+        skipToNext(video.currentSrc);
+        return;
+      }
+      // Also: if currentTime > duration - 0.5s (about to end), advance now.
+      if (video.duration && video.currentTime > video.duration - 0.5) {
+        console.log('[MoodScroll] video about to loop, advancing now');
+        autoAdvanceAt = 0;
+        watchedVideoLastTime = 0;
+        skipToNext(video.currentSrc);
+        return;
+      }
+      watchedVideoLastTime = video.currentTime;
+    }, 250);
 
     // ────────────────────────────────────────────────────────────────────
     // PER-MODE TUNING TABLE — Negative hashtag pre-skip
@@ -958,10 +989,11 @@ export default defineContentScript({
       if (!currentMode || currentMode === 'auto_scroll' || autoAdvanceAt === 0) return;
       if (Date.now() < autoAdvanceAt) return;
       const video = findPlayingVideo();
-      if (!video) { autoAdvanceAt = 0; return; }
+      if (!video) { autoAdvanceAt = 0; watchedVideoLastTime = 0; return; }
       autoAdvanceAt = 0;
+      watchedVideoLastTime = 0;
       skipToNext(video.currentSrc);
-    }, 500);
+    }, 250);
 
     // ---------- AUTO SCROLL LOOP (adaptive: classify category, hold for category-duration) ----------
     let autoScrollClassifying = false;
@@ -1222,11 +1254,12 @@ export default defineContentScript({
         } else {
           // MATCH: hold for the category-appropriate watch time so TikTok gets
           // a strong watch-time signal (the #1 ranking factor) AND auto-like so
-          // it also gets the explicit positive signal. Cap hold to the video's
-          // actual duration so short clips don't re-loop ("rewatch bug").
+          // it also gets the explicit positive signal. Cap hold to 92% of video
+          // duration so short clips never re-loop ("rewatch bug").
           const playingVideo = findPlayingVideo();
           const holdMs = holdForVideo(decision.category, playingVideo);
           autoAdvanceAt = Date.now() + holdMs;
+          watchedVideoLastTime = 0; // reset loop watchdog for new match
           console.log(`[MoodScroll] MATCH: ${decision.category}, holding ${holdMs}ms (dur=${playingVideo?.duration}s) | ${decision.reason || ''}`);
           if (autoEngage) maybeAutoLike(videoSrcAtStart, true);
         }
