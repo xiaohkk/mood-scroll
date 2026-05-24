@@ -303,6 +303,10 @@ export default defineContentScript({
 
     function ensureOverlay() {
       if (overlayRoot && document.documentElement.contains(overlayRoot)) return;
+      // Remove any stale overlay from a previous content-script load. When
+      // the extension is reloaded, the old overlay can persist in DOM with
+      // stale event handlers (e.g. missing the Reset button binding).
+      document.querySelectorAll('#moodscroll-overlay-root').forEach(el => el.remove());
       overlayRoot = document.createElement('div');
       overlayRoot.id = 'moodscroll-overlay-root';
       // Host is non-interactive; only the toggle button + panel inside the shadow root receive clicks.
@@ -790,6 +794,9 @@ export default defineContentScript({
       });
 
       const resetBtn = shadow.getElementById('ms-reset-btn');
+      if (!resetBtn) {
+        console.warn('[MoodScroll] Reset button NOT FOUND in shadow DOM — old version still running? Hard-refresh TikTok (⌘+Shift+R).');
+      }
       if (resetBtn) {
         resetBtn.addEventListener('click', async () => {
           console.log('[MoodScroll] 🔄 Reset Algo clicked');
