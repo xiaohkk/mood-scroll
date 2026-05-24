@@ -790,6 +790,7 @@ export default defineContentScript({
       const resetBtn = shadow.getElementById('ms-reset-btn');
       if (resetBtn) {
         resetBtn.addEventListener('click', async () => {
+          console.log('[MoodScroll] 🔄 Reset Algo clicked');
           // 1. Reset Mood Scroll's internal training state
           recentMatches.length = 0;
           phase = 'training';
@@ -798,12 +799,15 @@ export default defineContentScript({
           lastClassifiedVideoSrc = null;
           likedVideoSrcs.clear();
           likeTimestamps.length = 0;
-          await chrome.runtime.sendMessage({ type: 'reset_session' }).catch(() => {});
+          const sessionRes = await chrome.runtime.sendMessage({ type: 'reset_session' }).catch((e: any) => ({ error: String(e) }));
+          console.log('[MoodScroll] session cleared:', sessionRes);
           updatePhaseUI();
           updateOverlayStats();
           flashDecision(true, 'algo reset');
+          showResetBanner();
           // 2. Open TikTok's content preferences so user can click "Refresh For You feed"
-          chrome.runtime.sendMessage({ type: 'open_tiktok_settings' }).catch(() => {});
+          const settingsRes = await chrome.runtime.sendMessage({ type: 'open_tiktok_settings' }).catch((e: any) => ({ error: String(e) }));
+          console.log('[MoodScroll] TikTok settings tab:', settingsRes);
         });
       }
 
@@ -946,6 +950,31 @@ export default defineContentScript({
       banner.querySelector('.ms-locked-title')!.textContent = `${label} LOCKED IN`;
       banner.classList.add('show');
       setTimeout(() => banner.classList.remove('show'), 4000);
+    }
+
+    function showResetBanner() {
+      if (!shadow) return;
+      const banner = shadow.getElementById('ms-locked-banner');
+      if (!banner) return;
+      const title = banner.querySelector('.ms-locked-title') as HTMLElement;
+      const sub = banner.querySelector('.ms-locked-sub') as HTMLElement;
+      const icon = banner.querySelector('.ms-locked-icon') as HTMLElement;
+      const prevTitle = title.textContent;
+      const prevSub = sub.textContent;
+      const prevIcon = icon.textContent;
+      icon.textContent = '🔄';
+      title.textContent = 'RESET COMPLETE';
+      sub.textContent = 'TikTok settings opened — click "Refresh your For You feed"';
+      banner.classList.add('show');
+      setTimeout(() => {
+        banner.classList.remove('show');
+        // Restore original content for next LOCKED IN trigger
+        setTimeout(() => {
+          icon.textContent = prevIcon || '🎯';
+          title.textContent = prevTitle || 'LOCKED IN';
+          sub.textContent = prevSub || 'Algorithm tuned · scrolling at natural pace';
+        }, 600);
+      }, 4500);
     }
 
     function updatePhaseUI() {
