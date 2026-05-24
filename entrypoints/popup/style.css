@@ -1,77 +1,36 @@
-:root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-
-  color-scheme: light;
-  color: #1e293b;
-  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-}
-
-a {
-  font-weight: 500;
-  color: #4f46e5;
-  text-decoration: inherit;
-}
-a:hover {
-  color: #4338ca;
-}
-
 body {
   margin: 0;
-  display: flex;
-  place-items: center;
-  min-width: 320px;
-  min-height: 100vh;
+  font-family: 'JetBrains Mono', Menlo, Monaco, monospace;
+  background: #0a0a0a;
+  color: #e8e8e8;
+  width: 320px;
+  padding: 16px;
 }
-
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
+header { text-align: center; margin-bottom: 16px; }
+header h1 { margin: 0; font-size: 22px; letter-spacing: 0.5px; }
+.subtitle { font-size: 11px; opacity: 0.5; margin-top: 4px; }
+#modes-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
+.mode-btn {
+  background: #1a1a1a; color: #e8e8e8; border: 1px solid #2a2a2a;
+  border-radius: 8px; padding: 12px 8px; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  font-family: inherit; font-size: 12px; transition: all 0.15s;
 }
-
-button {
-  border-radius: 10px;
-  border: 2px solid #e2e8f0;
-  padding: 12px 20px;
-  font-size: 1em;
-  font-weight: 600;
-  font-family: inherit;
-  background: linear-gradient(145deg, #ffffff 0%, #f8fafc 100%);
-  color: #1e293b;
-  cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  position: relative;
-  overflow: hidden;
+.mode-btn:hover { background: #222; }
+.mode-btn.active { background: #f5d142; color: #0a0a0a; border-color: #f5d142; }
+.mode-btn .emoji { font-size: 22px; }
+.mode-btn .label { font-weight: 500; }
+#stats {
+  display: flex; flex-direction: column; gap: 4px; font-size: 13px;
+  padding: 12px; background: #111; border-radius: 8px; margin-bottom: 12px;
 }
-button:hover {
-  border-color: #4f46e5;
-  transform: translateY(-2px);
-  box-shadow: 0 10px 25px 0 rgba(79, 70, 229, 0.2);
-  background: linear-gradient(145deg, #f8fafc 0%, #eef2ff 100%);
+#view-receipt {
+  width: 100%; padding: 10px; background: #f5d142; color: #0a0a0a;
+  border: none; border-radius: 8px; font-family: inherit; font-weight: 600;
+  cursor: pointer; font-size: 13px;
 }
-button:focus,
-button:focus-visible {
-  outline: 2px solid #4f46e5;
-  outline-offset: 2px;
+#reset-link {
+  display: block; text-align: center; font-size: 10px;
+  color: #555; margin-top: 10px; text-decoration: none;
 }
-
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #1e293b;
-    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-  }
-  a:hover {
-    color: #4338ca;
-  }
-  button {
-    background: linear-gradient(145deg, #ffffff 0%, #f8fafc 100%);
-    color: #1e293b;
-  }
-}
+#reset-link:hover { color: #888; }

@@ -1,0 +1,115 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Mood Scroll — Overlay Preview</title>
+  <style>
+    body { margin: 0; background: #000; min-height: 100vh; color: white; font-family: sans-serif; padding: 32px; }
+    .stage { display: flex; align-items: center; justify-content: center; height: 80vh; opacity: 0.4; font-size: 18px; }
+  </style>
+</head>
+<body>
+  <div class="stage">↓↓↓ Imagine a TikTok video here. The overlay is bottom-right. Click the ✨ to expand. ↓↓↓</div>
+  <script>
+    const MODES = [
+      { id: 'brain_rot', emoji: '🧠💀', label: 'Brain Rot' },
+      { id: 'startup',   emoji: '🚀',   label: 'Startup'   },
+      { id: 'learn',     emoji: '📚',   label: 'Learn'     },
+      { id: 'laugh',     emoji: '😂',   label: 'Laugh'     },
+      { id: 'wind_down', emoji: '🌙',   label: 'Wind Down' },
+      { id: 'hype',      emoji: '💪',   label: 'Hype'      },
+      { id: 'cooking',   emoji: '🍳',   label: 'Cooking'   },
+      { id: 'custom',    emoji: '✨',   label: 'Custom'    }
+    ];
+    let currentMode = null, customDescription = '', autoEngage = true;
+    const root = document.createElement('div');
+    root.style.cssText = 'all: initial; position: fixed; inset: 0; z-index: 2147483647; pointer-events: none;';
+    const shadow = root.attachShadow({ mode: 'open' });
+    const modeButtons = MODES.map(m =>
+      `<button class="ms-mode" data-mode="${m.id}"><span class="ms-emoji">${m.emoji}</span><span class="ms-label">${m.label}</span></button>`
+    ).join('');
+    shadow.innerHTML = `
+<style>
+  :host { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Menlo, Monaco, monospace; }
+  * { box-sizing: border-box; font-family: inherit; }
+  .ms-toggle { position: fixed; bottom: 80px; right: 18px; width: 56px; height: 56px; border-radius: 50%; background: #f5d142; color: #0a0a0a; border: 2px solid #0a0a0a; cursor: pointer; font-size: 22px; box-shadow: 0 6px 24px rgba(0,0,0,0.4); transition: transform 0.15s; display: flex; align-items: center; justify-content: center; pointer-events: auto; }
+  .ms-toggle:hover { transform: scale(1.08); }
+  .ms-toggle.active { background: #00ff88; }
+  .ms-panel { position: fixed; bottom: 150px; right: 18px; width: 320px; background: #0a0a0a; color: #e8e8e8; border: 1px solid #2a2a2a; border-radius: 12px; padding: 16px; box-shadow: 0 12px 48px rgba(0,0,0,0.6); display: none; pointer-events: auto; }
+  .ms-panel.open { display: block; }
+  .ms-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .ms-title { font-size: 16px; font-weight: 600; letter-spacing: 0.5px; }
+  .ms-close { background: transparent; color: #888; border: none; cursor: pointer; font-size: 22px; line-height: 1; padding: 0 4px; }
+  .ms-close:hover { color: #fff; }
+  .ms-subtitle { font-size: 10px; opacity: 0.5; margin-bottom: 10px; }
+  .ms-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; }
+  .ms-mode { background: #1a1a1a; color: #e8e8e8; border: 1px solid #2a2a2a; border-radius: 8px; padding: 10px 6px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; font-family: inherit; transition: all 0.15s; }
+  .ms-mode:hover { background: #222; border-color: #444; }
+  .ms-mode.active { background: #f5d142; color: #0a0a0a; border-color: #f5d142; }
+  .ms-emoji { font-size: 20px; }
+  .ms-label { font-weight: 500; }
+  .ms-custom-wrap { margin-bottom: 10px; display: none; }
+  .ms-custom-wrap.show { display: block; }
+  .ms-custom-input { width: 100%; padding: 10px; background: #1a1a1a; color: #e8e8e8; border: 1px solid #2a2a2a; border-radius: 6px; font-size: 12px; font-family: inherit; box-sizing: border-box; }
+  .ms-custom-input:focus { outline: none; border-color: #f5d142; }
+  .ms-custom-hint { font-size: 10px; opacity: 0.5; margin-top: 4px; }
+  .ms-stats { display: flex; justify-content: space-around; padding: 10px; background: #111; border-radius: 6px; margin-bottom: 10px; font-size: 11px; }
+  .ms-stats b { color: #f5d142; font-weight: 600; }
+  .ms-active-line { font-size: 11px; padding: 6px 8px; background: #0d1f0d; color: #00ff88; border-radius: 4px; margin-bottom: 8px; text-align: center; border: 1px solid #1a3a1a; display: none; }
+  .ms-active-line.show { display: block; }
+  .ms-toggle-row { display: flex; align-items: center; justify-content: space-between; font-size: 11px; padding: 6px 0; margin-bottom: 6px; }
+  .ms-switch { position: relative; display: inline-block; width: 32px; height: 18px; }
+  .ms-switch input { opacity: 0; width: 0; height: 0; }
+  .ms-slider { position: absolute; cursor: pointer; inset: 0; background: #2a2a2a; border-radius: 18px; transition: 0.2s; }
+  .ms-slider::before { position: absolute; content: ""; height: 14px; width: 14px; left: 2px; bottom: 2px; background: #888; border-radius: 50%; transition: 0.2s; }
+  input:checked + .ms-slider { background: #f5d142; }
+  input:checked + .ms-slider::before { transform: translateX(14px); background: #0a0a0a; }
+  .ms-actions { display: flex; gap: 6px; }
+  .ms-stop, .ms-receipt-btn { flex: 1; padding: 8px; background: #1a1a1a; color: #e8e8e8; border: 1px solid #2a2a2a; border-radius: 6px; cursor: pointer; font-family: inherit; font-size: 11px; font-weight: 500; }
+  .ms-stop:hover { background: #3a0a0a; color: #ff6b6b; border-color: #5a1a1a; }
+  .ms-receipt-btn:hover { background: #222; border-color: #444; }
+</style>
+<button class="ms-toggle" id="ms-toggle" title="Mood Scroll">✨</button>
+<div class="ms-panel open" id="ms-panel">
+  <div class="ms-header"><span class="ms-title">Mood Scroll</span><button class="ms-close" id="ms-close">×</button></div>
+  <div class="ms-subtitle">pick a mood — i'll filter the feed</div>
+  <div class="ms-grid">${modeButtons}</div>
+  <div class="ms-custom-wrap" id="ms-custom-wrap">
+    <input class="ms-custom-input" id="ms-custom-input" type="text" placeholder="describe what you want..." maxlength="200" />
+    <div class="ms-custom-hint">enter to activate · examples: "startup founders", "60s rock", "golden retrievers"</div>
+  </div>
+  <div class="ms-active-line" id="ms-active-line">Active: <b id="ms-active-text"></b></div>
+  <div class="ms-stats"><span>⏱ <b id="ms-timer">0:00</b></span><span>👀 <b id="ms-watched">0</b></span><span>⏭ <b id="ms-skipped">0</b></span></div>
+  <div class="ms-toggle-row"><span>train algo (auto-like matches)</span><label class="ms-switch"><input type="checkbox" id="ms-engage-toggle" checked /><span class="ms-slider"></span></label></div>
+  <div class="ms-actions"><button class="ms-receipt-btn" id="ms-receipt-btn">📊 Receipt</button><button class="ms-stop" id="ms-stop">⏹ Stop</button></div>
+</div>`;
+    document.documentElement.appendChild(root);
+    // wire (mirrors content.ts logic)
+    const toggle = shadow.getElementById('ms-toggle');
+    const panel = shadow.getElementById('ms-panel');
+    toggle.onclick = () => panel.classList.toggle('open');
+    shadow.getElementById('ms-close').onclick = () => panel.classList.remove('open');
+    shadow.querySelectorAll('.ms-mode').forEach(b => {
+      b.onclick = () => {
+        const id = b.dataset.mode;
+        if (id === 'custom') { shadow.getElementById('ms-custom-wrap').classList.add('show'); shadow.getElementById('ms-custom-input').focus(); }
+        else { shadow.getElementById('ms-custom-wrap').classList.remove('show'); }
+        shadow.querySelectorAll('.ms-mode').forEach(x => x.classList.toggle('active', x === b));
+        currentMode = id;
+        toggle.classList.add('active');
+        toggle.textContent = MODES.find(m => m.id === id).emoji;
+        const activeLine = shadow.getElementById('ms-active-line');
+        activeLine.classList.add('show');
+        shadow.getElementById('ms-active-text').textContent = MODES.find(m => m.id === id).label;
+      };
+    });
+    shadow.getElementById('ms-stop').onclick = () => {
+      currentMode = null;
+      toggle.classList.remove('active');
+      toggle.textContent = '✨';
+      shadow.querySelectorAll('.ms-mode').forEach(x => x.classList.remove('active'));
+      shadow.getElementById('ms-active-line').classList.remove('show');
+    };
+  </script>
+</body>
+</html>

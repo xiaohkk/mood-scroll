@@ -1,2464 +1,1434 @@
-import { GeneralScraper, ScrapingConfig, ScrapingResult } from '../scripts/scraping/general-scraper';
-import { AIContentAnalyzer, AnalysisResult, DEFAULT_ANALYZER_CONFIG } from '../scripts/ai/ai-analyzer';
-
-// Video overlay configuration interface
-interface VideoOverlayConfig {
-  enabled: boolean;
-  opacity: number;
-  autoPlayOnReveal: boolean;
-  buttonText: string;
-  buttonColor: string;
-}
-
-// Video overlay manager class
-class VideoOverlayManager {
-  private config: VideoOverlayConfig;
-  private observer: MutationObserver | null = null;
-  private processedVideos = new WeakSet<Element>();
-  private intersectionObserver: IntersectionObserver | null = null;
-  private styleElement: HTMLStyleElement | null = null;
-  
-  constructor(config: VideoOverlayConfig) {
-    this.config = config;
-    this.initializeStyles();
-    this.createIntersectionObserver();
-  }
-  
-  private initializeStyles(): void {
-    // Remove existing styles if any
-    if (this.styleElement) {
-      this.styleElement.remove();
-    }
-    
-    this.styleElement = document.createElement('style');
-    this.styleElement.id = 'x-video-overlay-styles';
-    this.styleElement.textContent = `
-      .x-video-container {
-        position: relative !important;
-        display: inline-block !important;
-        width: 100% !important;
-        height: 100% !important;
-      }
-      
-      .x-video-overlay {
-        position: absolute !important;
-        top: 0 !important;
-        left: 0 !important;
-        right: 0 !important;
-        bottom: 0 !important;
-        width: 100% !important;
-        height: 100% !important;
-        background: rgba(0, 0, 0, ${this.config.opacity}) !important;
-        display: flex !important;
-        justify-content: center !important;
-        align-items: center !important;
-        z-index: 10 !important;
-        cursor: pointer !important;
-        transition: opacity 0.2s ease !important;
-        border-radius: inherit !important;
-      }
-      
-      .x-video-overlay:hover {
-        background: rgba(0, 0, 0, ${Math.min(this.config.opacity + 0.1, 1)}) !important;
-      }
-      
-      .x-video-overlay.hidden {
-        display: none !important;
-      }
-      
-      .x-view-video-btn {
-        background: ${this.config.buttonColor} !important;
-        color: white !important;
-        border: none !important;
-        padding: 12px 24px !important;
-        border-radius: 24px !important;
-        font-weight: 600 !important;
-        font-size: 15px !important;
-        cursor: pointer !important;
-        transition: all 0.2s ease !important;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2) !important;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
-        text-align: center !important;
-        white-space: nowrap !important;
-        user-select: none !important;
-        -webkit-user-select: none !important;
-        pointer-events: auto !important;
-      }
-      
-      .x-view-video-btn:hover {
-        background: #1a91da !important;
-        transform: translateY(-1px) !important;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3) !important;
-      }
-      
-      .x-view-video-btn:active {
-        transform: translateY(0) !important;
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2) !important;
-      }
-      
-      /* Ensure videos don't interfere with overlay */
-      .x-video-container video {
-        pointer-events: none !important;
-      }
-      
-      .x-video-container.revealed video {
-        pointer-events: auto !important;
-      }
-      
-      /* Handle different video container types */
-      [data-testid="videoPlayer"] .x-video-overlay,
-      [data-testid="VideoPlayer"] .x-video-overlay,
-      .video-player .x-video-overlay,
-      .Video .x-video-overlay {
-        border-radius: 16px !important;
-      }
-      
-      /* Mobile responsiveness */
-      @media (max-width: 768px) {
-        .x-view-video-btn {
-          padding: 10px 20px !important;
-          font-size: 14px !important;
-        }
-      }
-      
-      /* Handle promoted content */
-      [data-testid="placementTracking"] .x-video-overlay {
-        background: rgba(0, 0, 0, ${Math.min(this.config.opacity + 0.1, 1)}) !important;
-      }
-      
-      [data-testid="placementTracking"] .x-view-video-btn::after {
-        content: " (Ad)" !important;
-        font-size: 12px !important;
-        opacity: 0.8 !important;
-      }
-    `;
-    
-    document.head.appendChild(this.styleElement);
-  }
-  
-  private createIntersectionObserver(): void {
-    // Use IntersectionObserver for performance - only process visible videos
-    this.intersectionObserver = new IntersectionObserver(
-      (entries) => {
-        entries.forEach(entry => {
-          if (entry.isIntersecting) {
-            this.processVideoElement(entry.target);
-          }
-        });
-      },
-      {
-        rootMargin: '50px', // Start processing videos 50px before they enter viewport
-        threshold: 0.1
-      }
-    );
-  }
-  
-  public initialize(): void {
-    if (!this.isXdotCom()) {
-      return;
-    }
-    
-    console.log('VIDEO OVERLAY: Initializing video overlay manager for X.com');
-    
-    // Process existing videos
-    this.scanForVideos();
-    
-    // Start observing for new videos
-    this.startMutationObserver();
-  }
-  
-  private isXdotCom(): boolean {
-    return window.location.hostname.includes('x.com') || window.location.hostname.includes('twitter.com');
-  }
-  
-  private scanForVideos(): void {
-    // Multiple selectors to catch different video types
-    const videoSelectors = [
-      'video',
-      '[data-testid="videoPlayer"] video',
-      '[data-testid="VideoPlayer"] video',
-      '.video-player video',
-      '.Video video',
-      '[data-testid="placementTracking"] video', // Promoted videos
-      '.media-inline video' // Inline media
-    ];
-    
-    videoSelectors.forEach(selector => {
-      const videos = document.querySelectorAll(selector);
-      videos.forEach(video => {
-        if (this.intersectionObserver && !this.processedVideos.has(video)) {
-          this.intersectionObserver.observe(video);
-        }
-      });
-    });
-  }
-  
-  private startMutationObserver(): void {
-    if (this.observer) {
-      this.observer.disconnect();
-    }
-    
-    this.observer = new MutationObserver((mutations) => {
-      let shouldScan = false;
-      
-      mutations.forEach(mutation => {
-        // Check for new nodes containing videos
-        mutation.addedNodes.forEach(node => {
-          if (node.nodeType === Node.ELEMENT_NODE) {
-            const element = node as Element;
-            
-            // Check if the added node is a video or contains videos
-            if (element.tagName === 'VIDEO' || element.querySelector('video')) {
-              shouldScan = true;
-            }
-            
-            // Check for X.com specific video containers
-            if (element.matches('[data-testid*="video"], [data-testid*="Video"], .video-player, .Video') ||
-                element.querySelector('[data-testid*="video"], [data-testid*="Video"], .video-player, .Video')) {
-              shouldScan = true;
-            }
-          }
-        });
-      });
-      
-      if (shouldScan) {
-        // Debounce scanning to avoid excessive processing
-        setTimeout(() => this.scanForVideos(), 100);
-      }
-    });
-    
-    this.observer.observe(document.body, {
-      childList: true,
-      subtree: true
-    });
-  }
-  
-  private processVideoElement(videoElement: Element): void {
-    if (!videoElement || this.processedVideos.has(videoElement)) {
-      return;
-    }
-    
-    const video = videoElement as HTMLVideoElement;
-    
-    // Mark as processed
-    this.processedVideos.add(video);
-    
-    // Find the appropriate container for the overlay
-    const container = this.findVideoContainer(video);
-    if (!container) {
-      console.warn('VIDEO OVERLAY: Could not find suitable container for video');
-      return;
-    }
-    
-    // Create overlay
-    this.createVideoOverlay(video, container);
-  }
-  
-  private findVideoContainer(video: HTMLVideoElement): Element | null {
-    // Look for X.com specific video containers
-    let current = video.parentElement;
-    
-    while (current && current !== document.body) {
-      // Check for X.com video containers
-      if (current.matches('[data-testid*="video"], [data-testid*="Video"], .video-player, .Video, .media-inline') ||
-          current.hasAttribute('data-testid') && current.getAttribute('data-testid')?.includes('video')) {
-        return current;
-      }
-      
-      // If we find a container with specific dimensions, use it
-      const style = window.getComputedStyle(current);
-      if (style.position === 'relative' || style.position === 'absolute') {
-        const rect = current.getBoundingClientRect();
-        if (rect.width > 100 && rect.height > 100) {
-          return current;
-        }
-      }
-      
-      current = current.parentElement;
-    }
-    
-    // Fallback: use video's direct parent
-    return video.parentElement;
-  }
-  
-  private createVideoOverlay(video: HTMLVideoElement, container: Element): void {
-    // Check if overlay already exists
-    if (container.querySelector('.x-video-overlay')) {
-      return;
-    }
-    
-    // Ensure container has relative positioning
-    const containerElement = container as HTMLElement;
-    if (window.getComputedStyle(containerElement).position === 'static') {
-      containerElement.style.position = 'relative';
-    }
-    
-    // Add container class
-    containerElement.classList.add('x-video-container');
-    
-    // Create overlay
-    const overlay = document.createElement('div');
-    overlay.className = 'x-video-overlay';
-    
-    // Create button
-    const button = document.createElement('button');
-    button.className = 'x-view-video-btn';
-    button.textContent = this.config.buttonText;
-    button.setAttribute('aria-label', 'Click to reveal and play video');
-    
-    // Handle click events
-    const handleClick = (event: Event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      this.revealVideo(video, overlay, containerElement);
-    };
-    
-    button.addEventListener('click', handleClick);
-    overlay.addEventListener('click', handleClick);
-    
-    // Append button to overlay
-    overlay.appendChild(button);
-    
-    // Append overlay to container
-    containerElement.appendChild(overlay);
-    
-    // Prevent video autoplay by default
-    if (video.autoplay) {
-      video.autoplay = false;
-    }
-    
-    // Pause the video if it's playing
-    if (!video.paused) {
-      video.pause();
-    }
-    
-    console.log('VIDEO OVERLAY: Created overlay for video in container', containerElement);
-  }
-  
-  private revealVideo(video: HTMLVideoElement, overlay: HTMLElement, container: HTMLElement): void {
-    // Hide overlay
-    overlay.classList.add('hidden');
-    
-    // Mark container as revealed
-    container.classList.add('revealed');
-    
-    // Handle auto-play setting
-    if (this.config.autoPlayOnReveal) {
-      video.play().catch(error => {
-        console.log('VIDEO OVERLAY: Could not auto-play video (this is normal):', error);
-      });
-    }
-    
-    console.log('VIDEO OVERLAY: Video revealed');
-    
-    // Send analytics event if needed
-    this.trackVideoReveal(video);
-  }
-  
-  private trackVideoReveal(video: HTMLVideoElement): void {
-    // Optional: Track video reveals for analytics
-    try {
-      const videoData = {
-        src: video.src || video.currentSrc,
-        duration: video.duration,
-        timestamp: Date.now(),
-        url: window.location.href
-      };
-      
-      console.log('VIDEO OVERLAY: Video revealed:', videoData);
-    } catch (error) {
-      // Ignore tracking errors
-    }
-  }
-  
-  public updateConfig(newConfig: Partial<VideoOverlayConfig>): void {
-    this.config = { ...this.config, ...newConfig };
-    this.initializeStyles();
-  }
-  
-  public destroy(): void {
-    if (this.observer) {
-      this.observer.disconnect();
-      this.observer = null;
-    }
-    
-    if (this.intersectionObserver) {
-      this.intersectionObserver.disconnect();
-      this.intersectionObserver = null;
-    }
-    
-    if (this.styleElement) {
-      this.styleElement.remove();
-      this.styleElement = null;
-    }
-    
-    // Remove all overlays
-    document.querySelectorAll('.x-video-overlay').forEach(overlay => {
-      overlay.remove();
-    });
-    
-    // Remove container classes
-    document.querySelectorAll('.x-video-container').forEach(container => {
-      container.classList.remove('x-video-container', 'revealed');
-    });
-    
-    console.log('VIDEO OVERLAY: Manager destroyed');
-  }
-  
-  public getStats(): { totalVideos: number, revealedVideos: number } {
-    const totalVideos = document.querySelectorAll('.x-video-container').length;
-    const revealedVideos = document.querySelectorAll('.x-video-container.revealed').length;
-    
-    return { totalVideos, revealedVideos };
-  }
-}
-
-declare global {
-  interface Window {
-    _scrollStopObserver: MutationObserver | null;
-    _twitterFixInterval: number | null;
-    _youtubeSettingsObserver: MutationObserver | null;
-    setTimeout(callback: (...args: any[]) => void, ms?: number): number;
-    clearTimeout(timeoutId?: number): void;
-    setInterval(callback: (...args: any[]) => void, ms?: number): number;
-    clearInterval(intervalId?: number): void;
-  }
-  
-  interface HTMLElement {
-    _reelsObserved?: boolean;
-  }
-}
+import { MODES, type ModeId } from '@/entrypoints/shared/modes';
+import { tier1Classify } from '@/entrypoints/shared/tier1';
 
 export default defineContentScript({
-  matches: ['http://*/*', 'https://*/*', 'file://*/*'], // Added file://*/*
-  runAt: 'document_idle', // Added runAt
+  matches: ['https://www.tiktok.com/*'],
   main() {
-    // Get the current hostname
-    const currentHost = window.location.hostname.replace(/^www\./, '');
-    
-    // Initialize variables
-    let scrollCount = 0;
-    let maxScrolls = 30; // Default value to 30
-    let isBlocked = false;
-    let distractingSites = ['youtube.com', 'x.com', 'reddit.com','instagram.com','facebook.com']; // Default sites
-    let resetInterval = 0; // Default: no auto reset
-    let lastResetTime = Date.now();
-    let customLimits: Record<string, number> = {}; // Custom scroll limits per domain
-    let temporaryBonusScrolls: Record<string, number> = {}; // Temporary bonus scrolls per domain (reset on timer/manual reset)
-    let adBlockerCompatMode = true; // Enable compatibility mode for ad blockers
-    
-    // AI Content Analysis variables
-    let contentScraper: GeneralScraper | null = null;
-    let aiAnalyzer: AIContentAnalyzer | null = null;
-    let scrollStartTime = Date.now();
-    let aiAnalysisEnabled = true; // Default enabled
-    let hasTriggeredAIAnalysis = false; // Prevent multiple analyses per session
-    let isAnalysisInProgress = false; // Prevent race conditions
-    // --- START: New state variables for final scroll scraping ---
-    let isScrapingFinalScrolls = false;
-    let finalScrollsScrapedCount = 0;
-    const FINAL_SCROLLS_TO_SCRAPE = 3;
-    // --- END: New state variables ---
-    
-    // Grace period variables for pending analysis
-    let isInGracePeriod = false; // Whether we're in grace period waiting for analysis
-    let gracePeriodScrollsUsed = 0; // How many grace scrolls have been used
-    let maxGracePeriodScrolls = 5; // Maximum extra scrolls allowed during grace period
-    let gracePeriodStartTime = 0; // When grace period started
-    let maxGracePeriodDuration = 15000; // 15 seconds max grace period
-    
-    // Video Overlay variables
-    let videoOverlayManager: VideoOverlayManager | null = null;
-    let videoOverlaySettings = {
-      enabled: true,
-      opacity: 0.9,
-      autoPlayOnReveal: false,
-      buttonText: 'View Video',
-      buttonColor: '#1DA1F2'
+    const CONFIG = {
+      // Verified May 2026 against live tiktok.com/foryou DOM:
+      videoSelector: 'video',
+      itemSelector: '[data-e2e="recommend-list-item-container"]',
+      captionSelector: '[data-e2e="video-desc"]',
+      audioSelector: '[data-e2e="video-music"]',
+      creatorSelector: 'a[href^="/@"]',
+      likeIconSelector: '[data-e2e="like-icon"]',
+      likeAriaSelector: 'button[aria-label*="Like" i]',
+      scrollContainerId: 'column-list-container',
+      minVideoHeight: 200,
+      decisionIntervalMs: 1500,
+      tickIntervalMs: 500,
+      likeDelayMinMs: 4000,
+      likeDelayJitterMs: 3000,
+      likeProbability: 0.55,
+      likeRateLimitWindowMs: 60 * 60 * 1000,
+      likeRateLimitMax: 20
     };
-    
-    // YouTube-specific settings
-    let youtubeSettings = {
-      hideShorts: false,
-      hideHomeFeed: false
-    };
-    // Instagram-specific settings
-    let instagramSettings = {
-      hideReels: false
-    };
-    // Pomodoro settings
-    let isPomodoroActive = false;
-    let pomodoroRemainingMinutes = 0;
-    let pomodoroRemainingSeconds = 0;
-    let pomodoroDuration = 0;
-    let pomodoroEndTime = 0;
-    let pomodoroUpdateInterval: ReturnType<typeof globalThis.setInterval> | null = null;
-    let pomodoroOverlay: HTMLElement;
 
-    function checkIfPdf(): boolean {
-      const isPdf = (
-        (window.location.protocol === 'file:' && window.location.pathname.endsWith('.pdf')) ||
-        window.location.pathname.endsWith('.pdf') ||
-        document.contentType === 'application/pdf' ||
-        document.querySelector('embed[type="application/pdf"]') !== null ||
-        document.querySelector('object[type="application/pdf"]') !== null ||
-        (document.body && document.body.children.length === 1 && document.body.children[0].tagName === 'EMBED' && (document.body.children[0] as HTMLEmbedElement).type === 'application/pdf') ||
-        (document.documentElement && document.documentElement.innerHTML.includes('chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai') && window.location.href.endsWith('.pdf'))
-      );
-      // console.log(`CONTENT SCRIPT: checkIfPdf() evaluated: ${isPdf}, Path: ${window.location.pathname}, Type: ${document.contentType}`); // Keep for debugging if needed
-      return isPdf;
+    // ---------- STATE ----------
+    type Phase = 'training' | 'stable';
+    let currentMode: ModeId | null = null;
+    let customDescription = '';
+    let autoEngage = true;
+    let sidekickActive = false;
+    let lastDecision: { matched: boolean; category: string; at: number } | null = null;
+    let isClassifying = false;
+    let lastDecisionAt = 0;
+    let lastClassifiedVideoSrc: string | null = null;
+    const likedVideoSrcs = new Set<string>();
+    const likeTimestamps: number[] = [];
+    // Adaptive algo: track recent matches to switch between Training (aggressive engagement)
+    // and Stable (relaxed) phases as the TikTok algorithm converges on the user's niche.
+    let phase: Phase = 'training';
+    const recentMatches: boolean[] = [];
+    const MATCH_WINDOW = 10;
+    const STABLE_ENTER_THRESHOLD = 0.6;  // 60% matches → tuned
+    const STABLE_EXIT_THRESHOLD = 0.4;   // drops below 40% → re-train
+    const TRAINING_CONFIG = { decisionIntervalMs: 300, likeProbability: 1.0, useFrames: false };
+    const STABLE_CONFIG = { decisionIntervalMs: 2500, likeProbability: 0.3, useFrames: true };
+    const tuning = () => phase === 'training' ? TRAINING_CONFIG : STABLE_CONFIG;
+
+    // Watch durations (ms) per category. Movie-scene-like content (drama, edu)
+    // holds longer; brain rot scrolls fast.
+    const WATCH_DURATIONS: Record<string, number> = {
+      brain_rot: 2500,
+      food_porn: 4000,
+      baddies: 5000,
+      comedy: 5500,
+      fitness: 7000,
+      larp: 7500,
+      motivational: 8000,
+      wholesome: 7500,
+      wind_down: 9000,
+      cooking: 10000,
+      news_politics: 11000,
+      educational: 13000,
+      startup: 13000,
+      drama_storytime: 15000,
+      other: 6000
+    };
+    function watchDurationFor(category?: string | null): number {
+      return WATCH_DURATIONS[category || 'other'] || 6000;
     }
-    
-    // Create overlay for when scrolling is blocked
-    const overlay = document.createElement('div');
-    overlay.id = 'scroll-stop-overlay';
-    overlay.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100vw;
-      height: 100vh;
-      background-color: rgba(0, 0, 0, 0.95);
-      color: white;
-      display: none;
-      z-index: 2147483647; /* Maximum z-index value */
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      text-align: center;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      overflow: hidden;
-      user-select: none;
-      -webkit-user-select: none;
-      pointer-events: auto !important;
-      touch-action: none;
-    `;
-    
-    // Add warning elements to the overlay
-    const overlayIcon = document.createElement('div');
-    overlayIcon.innerHTML = '⚠️';
-    overlayIcon.style.cssText = `
-      font-size: 64px;
-      margin-bottom: 20px;
-    `;
-    
-    const overlayTitle = document.createElement('h2');
-    overlayTitle.textContent = 'Scrolling Limit Reached';
-    overlayTitle.style.cssText = `
-      font-size: 28px;
-      margin: 0 0 15px 0;
-      color: #fff;
-    `;
-    
-    const overlayMessage = document.createElement('p');
-    overlayMessage.textContent = 'You\'ve reached your maximum number of scrolls for this site.';
-    overlayMessage.style.cssText = `
-      font-size: 18px;
-      max-width: 500px;
-      margin: 0 0 10px 0;
-      color: #eee;
-    `;
-    
-    const overlayHint = document.createElement('p');
-    overlayHint.style.cssText = `
-      font-size: 16px;
-      max-width: 500px;
-      margin: 10px 0 0 0;
-      color: #bbb;
-    `;
-    
-    // This will be updated dynamically when timer is set
-    const overlayTimer = document.createElement('div');
-    overlayTimer.id = 'scroll-stop-timer';
-    overlayTimer.style.cssText = `
-      font-size: 16px;
-      margin-top: 20px;
-      padding: 10px 15px;
-      border-radius: 5px;
-      background-color: rgba(255, 255, 255, 0.1);
-    `;
-    
-    // Append all elements to the overlay
-    overlay.appendChild(overlayIcon);
-    overlay.appendChild(overlayTitle);
-    overlay.appendChild(overlayMessage);
-    overlay.appendChild(overlayHint);
-    overlay.appendChild(overlayTimer);
-    
-    // Create pending analysis overlay
-    const pendingOverlay = document.createElement('div');
-    pendingOverlay.id = 'pending-analysis-overlay';
-    pendingOverlay.style.cssText = `
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      background: linear-gradient(135deg, rgba(79, 70, 229, 0.95), rgba(99, 102, 241, 0.95));
-      color: white;
-      padding: 25px 35px;
-      border-radius: 16px;
-      max-width: 450px;
-      text-align: center;
-      z-index: 2147483645;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
-      backdrop-filter: blur(10px);
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      display: none;
-    `;
-    
-    pendingOverlay.innerHTML = `
-      <div style="font-size: 24px; margin-bottom: 15px;">🔍</div>
-      <h3 style="margin: 0 0 10px 0; font-size: 18px; font-weight: 600;">Analyzing Your Session...</h3>
-      <p style="margin: 0 0 15px 0; font-size: 14px; opacity: 0.9; line-height: 1.4;">
-        You've reached your scroll limit. We're checking your activity to see if you deserve bonus scrolls.
-      </p>
-      <div id="grace-period-info" style="font-size: 13px; opacity: 0.8; margin-bottom: 15px;">
-        You may continue for <span id="grace-scrolls-remaining">5</span> more scrolls while we analyze.
-      </div>
-      <div style="display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 13px; opacity: 0.7;">
-        <div class="spinner" style="
-          width: 16px; 
-          height: 16px; 
-          border: 2px solid rgba(255,255,255,0.3); 
-          border-top: 2px solid white; 
-          border-radius: 50%; 
-          animation: spin 1s linear infinite;
-        "></div>
-        <span>Please wait...</span>
-      </div>
-      <style>
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-      </style>
-    `;
-    
-    // Create a counter display
-    const counter = document.createElement('div');
-    counter.id = 'scroll-stop-counter';
-    counter.style.cssText = `
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      background-color: rgba(29, 161, 242, 0.8);
-      color: white;
-      padding: 8px 12px;
-      border-radius: 20px;
-      font-weight: bold;
-      z-index: 9999;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      display: none;
-      pointer-events: none;
-    `;
-    
-    // Add listener for messages from the background script
-    browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
-      console.log('CONTENT SCRIPT: Received message:', JSON.stringify(message));
-
-      // Helper function to remove the completion modal
-      const removeCompletionModal = () => {
-        const existingModal = document.getElementById('pomodoro-completion-modal-unique');
-        if (existingModal) {
-          try {
-            existingModal.remove();
-            console.log('CONTENT SCRIPT: Removed pomodoro completion modal.');
-          } catch (e) {
-            console.error('CONTENT SCRIPT: Error removing existing modal:', e);
-          }
-        }
-        const breakOverModal = document.getElementById('pomodoro-break-over-modal-unique');
-        if (breakOverModal) {
-          try {
-            breakOverModal.remove();
-            console.log('CONTENT SCRIPT: Removed break over modal.');
-          } catch (e) {
-            console.error('CONTENT SCRIPT: Error removing break over modal:', e);
-          }
-        }
-      };
-      
-      if (message.type === 'POMODORO_UPDATE') {
-        removeCompletionModal(); // Remove modal before processing update
-        console.log('CONTENT SCRIPT: POMODORO_UPDATE received. isActive:', message.isActive, 'Force display:', message.forceDisplay);
-        if (message.isActive) {
-          isPomodoroActive = true;
-          pomodoroRemainingMinutes = message.remaining.minutes;
-          pomodoroRemainingSeconds = message.remaining.seconds;
-          pomodoroDuration = message.duration;
-          const remainingMs = (message.remaining.minutes * 60 + message.remaining.seconds) * 1000;
-          pomodoroEndTime = Date.now() + remainingMs;
-          
-          await createPomodoroOverlay(); // Await creation and DOM insertion
-          
-          updatePomodoroDisplay(message.remaining.minutes, message.remaining.seconds, message.duration, message.isBreak);
-          
-          if (message.forceDisplay || isPomodoroActive) {
-            console.log('CONTENT SCRIPT: Attempting to show pomodoro overlay via POMODORO_UPDATE. Overlay object:', pomodoroOverlay, 'isPomodoroActive:', isPomodoroActive, 'forceDisplay:', message.forceDisplay);
-            if (pomodoroOverlay) {
-              pomodoroOverlay.style.setProperty('display', 'block', 'important'); // Ensure display:block overrides other styles
-              console.log('CONTENT SCRIPT: Set pomodoro overlay display to block via POMODORO_UPDATE. Current display style:', pomodoroOverlay.style.display);
-            } else {
-              console.error('CONTENT SCRIPT: pomodoroOverlay is null or undefined when trying to show it in POMODORO_UPDATE.');
-            }
-          }
-          
-          if (pomodoroOverlay) {
-            if (message.isBreak) {
-              console.log('CONTENT SCRIPT: Setting break styling.');
-              pomodoroOverlay.style.backgroundColor = 'rgba(33, 150, 243, 0.85)';
-              const iconElement = pomodoroOverlay.querySelector('.pomodoro-icon');
-              if (iconElement) iconElement.textContent = '☕';
-            } else {
-              console.log('CONTENT SCRIPT: Setting regular pomodoro styling.');
-              pomodoroOverlay.style.backgroundColor = 'rgba(76, 175, 80, 0.85)';
-              const iconElement = pomodoroOverlay.querySelector('.pomodoro-icon');
-              if (iconElement) iconElement.textContent = '🍅';
-            }
-          }
-          startLocalPomodoroUpdate();
-        } else {
-          console.log('CONTENT SCRIPT: POMODORO_UPDATE received: inactive.');
-          isPomodoroActive = false;
-          if (pomodoroOverlay) pomodoroOverlay.style.display = 'none';
-          stopLocalPomodoroUpdate();
-        }
-      } else if (message.type === 'POMODORO_COMPLETE_PROMPT') {
-        console.log('CONTENT SCRIPT: POMODORO_COMPLETE_PROMPT received. Duration:', message.duration);
-        
-        // Always hide the timer overlay when showing the completion modal
-        if (pomodoroOverlay) pomodoroOverlay.style.display = 'none';
-        stopLocalPomodoroUpdate();
-        
-        // Ensure we handle the message even if not focused by forcing the modal to appear
-        setTimeout(() => { 
-          // Add a small delay to ensure DOM is ready
-          const duration = message.duration || 25;
-          const breakDuration = Math.round(duration / 5) || 5;
-          const modalId = 'pomodoro-completion-modal-unique';
-          
-          // First check if a modal already exists and remove it to avoid conflicts
-          let existingModal = document.getElementById(modalId);
-          if (existingModal) {
-            try {
-              existingModal.remove();
-            } catch (e) {
-              console.error('CONTENT SCRIPT: Error removing existing modal:', e);
-            }
-          }
-          
-          // Simplified modal creation with minimal DOM operations
-          const modalOverlay = document.createElement('div');
-          modalOverlay.id = modalId;
-          modalOverlay.style.cssText = `
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background-color: rgba(0, 0, 0, 0.75); display: flex; align-items: center;
-            justify-content: center; z-index: 2147483647;
-          `;
-          
-          // Create a single HTML string to minimize DOM operations
-          modalOverlay.innerHTML = `
-            <div style="background-color: white; padding: 28px; border-radius: 14px;
-              box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35); max-width: 460px; text-align: center;
-              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-              
-              <div style="font-size: 54px; margin-bottom: 20px; color: #4caf50;">🎉</div>
-              <h2 style="margin-top: 0; color: #333; font-size: 24px; font-weight: 600;">Pomodoro Complete!</h2>
-              <p style="color: #555; font-size: 16px; line-height: 1.6; margin: 12px 0;">
-                Your ${duration} minute pomodoro session is complete. Great work!
-              </p>
-              <p style="color: #555; font-size: 16px; line-height: 1.6; margin-bottom: 20px;">
-                Would you like to take a ${breakDuration} minute break or stop the timer and reset your scrolls?
-              </p>
-              <div style="display: flex; justify-content: space-around; gap: 15px; margin-top: 25px;">
-                <button id="pomodoro-stop-btn-modal" style="flex: 1; padding: 14px 20px; background-color: #f44336; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; transition: all 0.2s; font-weight: 500; box-shadow: 0 2px 5px rgba(0,0,0,0.15);">Stop & Reset</button>
-                <button id="pomodoro-break-btn-modal" style="flex: 1; padding: 14px 20px; background-color: #2196f3; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; transition: all 0.2s; font-weight: 500; box-shadow: 0 2px 5px rgba(0,0,0,0.15);">Start Break (${breakDuration}m)</button>
-              </div>
-            </div>
-          `;
-          
-          // Add to DOM
-          const isPdfPageForModal = checkIfPdf();
-          const parentElement = isPdfPageForModal ? document.documentElement : document.body;
-
-          if (parentElement) {
-            parentElement.appendChild(modalOverlay);
-            console.log(`CONTENT SCRIPT: Pomodoro completion modal added to ${isPdfPageForModal ? 'document.documentElement' : 'document.body'}.`);
-          } else {
-            console.error(`CONTENT SCRIPT: Could not find parentElement for completion modal. PDF: ${isPdfPageForModal}. Appending to body as fallback.`);
-            document.body.appendChild(modalOverlay); // Fallback
-          }
-          
-          // Simplified button handlers with minimal event listeners
-          const stopBtn = document.getElementById('pomodoro-stop-btn-modal');
-          const breakBtn = document.getElementById('pomodoro-break-btn-modal');
-            if (stopBtn) {
-            stopBtn.onclick = () => {
-              console.log('CONTENT SCRIPT: Stop button clicked');
-              modalOverlay.remove(); // Remove the modal completely
-              
-              browser.runtime.sendMessage({ type: 'STOP_POMODORO_AND_RESET' })
-                .then(() => {
-                  isPomodoroActive = false;
-                })
-                .catch(err => {
-                  console.error('CONTENT SCRIPT: Error sending stop message:', err);
-                  isPomodoroActive = false;
-                });
-            };
-          }
-          
-          if (breakBtn) {
-            breakBtn.onclick = () => {
-              console.log('CONTENT SCRIPT: Break button clicked');
-              modalOverlay.remove(); // Remove the modal completely
-              
-              browser.runtime.sendMessage({ type: 'START_BREAK', minutes: breakDuration })
-                .catch(err => console.error('CONTENT SCRIPT: Error sending break message:', err));
-            };
-          }
-        }, 100); // Correctly close setTimeout and add delay
-      } else if (message.type === 'BREAK_COMPLETE') {
-        removeCompletionModal(); // Remove modal before processing update
-        // Reset the pomodoro UI when break is complete
-        isPomodoroActive = false;
-        if (pomodoroOverlay) {
-          pomodoroOverlay.style.display = 'none';
-        }
-        stopLocalPomodoroUpdate();
-        
-        // Notify the user that break is complete
-        const notification = document.createElement('div');
-        notification.style.cssText = `
-          position: fixed;
-          bottom: 20px;
-          right: 20px;
-          background-color: rgba(33, 150, 243, 0.9);
-          color: white;
-          padding: 12px 20px;
-          border-radius: 8px;
-          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-          font-weight: bold;
-          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
-          z-index: 2147483647;
-          animation: fadeIn 0.5s, fadeOut 0.5s 4.5s;
-        `;
-        
-        notification.innerHTML = `
-          <div style="display: flex; align-items: center; gap: 10px;">
-            <div style="font-size: 20px;">☕</div>
-            <div>Break complete! Ready to focus again?</div>
-          </div>
-        `;
-        
-        // Add animation keyframes
-        const style = document.createElement('style');
-        style.innerHTML = `
-          @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-          }
-          @keyframes fadeOut {
-            from { opacity: 1; transform: translateY(0); }
-            to { opacity: 0; transform: translateY(20px); }
-          }
-        `;
-        document.head.appendChild(style);
-        
-        document.body.appendChild(notification);
-        
-        // Remove notification after 5 seconds
-        setTimeout(() => {
-          if (document.body.contains(notification)) {
-            document.body.removeChild(notification);
-          }
-        }, 5000);
-        
-        // Reset the scroll count if we're on a distracting site
-        if (isDistractingSite()) {
-          scrollCount = 0;
-          lastResetTime = message.lastResetTime;
-          updateCounter();
-          setScrollBlocking(false);
-        }      } else if (message.type === 'BREAK_COMPLETE_NOTIFICATION') {
-        // We'll just show a notification that break is complete and the next Pomodoro started
-        // No modal is needed as the Pomodoro automatically restarts now
-        console.log('CONTENT SCRIPT: BREAK_COMPLETE_NOTIFICATION received');
-        removeCompletionModal(); // Clear any other modals
-        
-        // Notify the user that break is complete and new Pomodoro started
-        const notification = document.createElement('div');
-        notification.style.cssText = `
-          position: fixed;
-          bottom: 20px;
-          right: 20px;
-          background-color: rgba(76, 175, 80, 0.9); 
-          color: white;
-          padding: 12px 20px;
-          border-radius: 8px;
-          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-          font-weight: bold;
-          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
-          z-index: 2147483647;
-          animation: fadeIn 0.5s, fadeOut 0.5s 4.5s;
-        `;
-        
-        const lastWorkDuration = message.lastPomodoroWorkDuration || 25;
-        
-        notification.innerHTML = `
-          <div style="display: flex; align-items: center; gap: 10px;">
-            <div style="font-size: 20px;">🍅</div>
-            <div>Break complete! New ${lastWorkDuration} min Pomodoro started.</div>
-          </div>
-        `;
-        
-        document.body.appendChild(notification);
-        
-        // Remove notification after 5 seconds
-        setTimeout(() => {
-          if (document.body.contains(notification)) {
-            document.body.removeChild(notification);
-          }
-        }, 5000);
-      } else if (message.type === 'POMODORO_STOPPED_AND_RESET') {
-        removeCompletionModal(); // Remove modal before processing update
-        // Reset pomodoro UI
-        isPomodoroActive = false;
-        if (pomodoroOverlay) {
-          pomodoroOverlay.style.display = 'none';
-        }
-        stopLocalPomodoroUpdate();
-        
-        // Reset scroll count
-        if (isDistractingSite()) {
-          scrollCount = 0;
-          lastResetTime = message.lastResetTime;
-          updateCounter();
-          setScrollBlocking(false);
-        }
-      } else if (message.type === 'RESET_COUNTER') {
-        scrollCount = 0;
-        lastResetTime = message.lastResetTime;
-        updateCounter();
-        setScrollBlocking(false);
-        // Reset AI analysis flag
-        hasTriggeredAIAnalysis = false;
-        isAnalysisInProgress = false;
-        // --- START: Reset new state variables ---
-        isScrapingFinalScrolls = false;
-        finalScrollsScrapedCount = 0;
-        // --- END: Reset new state variables ---
-        
-        // Reset grace period state
-        if (isInGracePeriod) {
-          endGracePeriod(true);
-        }
-        isInGracePeriod = false;
-        gracePeriodScrollsUsed = 0;
-        
-        // Clear scraper buffer
-        if (contentScraper) {
-          contentScraper.clearBuffer();
-        }
-        // Clear temporary bonus scrolls
-        temporaryBonusScrolls = {};
-      } else if (message.type === 'SETTINGS_UPDATED') {
-        // Update local settings
-        maxScrolls = message.maxScrolls;
-        distractingSites = message.distractingSites;        resetInterval = message.resetInterval;
-        customLimits = message.customLimits || {};
-        youtubeSettings = message.youtubeSettings || { hideShorts: false, hideHomeFeed: false };
-        instagramSettings = message.instagramSettings || { hideReels: false };
-        videoOverlaySettings = message.videoOverlaySettings || videoOverlaySettings;
-        
-        // Apply YouTube-specific settings if needed
-        if (currentHost.includes('youtube.com')) {
-          injectYoutubeStylesheet();
-          setupYoutubeObserver();
-          handleYoutubeHomeRedirect();
-        }
-
-        // Apply Instagram-specific settings if needed
-        if (currentHost.includes('instagram.com')) {
-          handleInstagramReelsRedirect();
-        }
-        
-        // Update Video Overlay Manager if needed
-        if (currentHost.includes('x.com') || currentHost.includes('twitter.com')) {
-          if (videoOverlaySettings.enabled && videoOverlayManager) {
-            videoOverlayManager.updateConfig(videoOverlaySettings);
-          } else if (videoOverlaySettings.enabled && !videoOverlayManager) {
-            initializeVideoOverlay();
-          } else if (!videoOverlaySettings.enabled && videoOverlayManager) {
-            videoOverlayManager.destroy();
-            videoOverlayManager = null;
-          }
-        }
-        
-        // Update the counter
-        updateCounter();
-        
-        // Start/stop timer updates based on new settings
-        if (resetInterval > 0) {
-          startTimerUpdates();
-        } else {
-          stopTimerUpdates();
-        }
+    // Cap the category-appropriate hold to the video's actual duration so
+    // short clips (3-8s) don't re-loop. Always keep at least 2.5s for the
+    // like to register.
+    function holdForVideo(category: string | null | undefined, video: HTMLVideoElement | null): number {
+      const base = watchDurationFor(category);
+      const dur = (video?.duration && isFinite(video.duration)) ? Math.floor(video.duration * 1000) : 0;
+      if (dur > 0 && dur < base) {
+        return Math.max(2500, dur - 500);
       }
-      
-      // Return true for async message handling
-      return true;
+      return base;
+    }
+    let autoAdvanceAt = 0; // when to advance the current matched video
+
+    // ────────────────────────────────────────────────────────────────────
+    // PER-MODE TUNING TABLE — Negative hashtag pre-skip
+    // ────────────────────────────────────────────────────────────────────
+    // If a caption contains ANY of these hashtags, the video is INSTANTLY
+    // skipped without any API call (~5ms). Catches the obvious 50-70% of
+    // mismatches for free. To add a new mode, just add a key here.
+    //
+    // Each list = hashtags that are DEFINITELY not what the user wants
+    // when that mode is selected. Be comprehensive but not so broad that
+    // you skip legitimate edge cases.
+
+    // Modes that REQUIRE the API + visual frame for every classification.
+    // We skip text-only pre-filters for these because the visual evidence is
+    // essential (e.g. LARP needs to SEE the Lambo / Rolex / cat-with-cash;
+    // Brain Rot needs to SEE if the content is animated/AI-generated).
+    const ALWAYS_VISION_MODES = new Set<string>(['larp', 'baddies', 'fitness', 'brain_rot']);
+
+    const NEGATIVE_HASHTAGS: Record<string, string[]> = {
+      startup: [
+        'dance', 'dancing', 'makeup', 'beauty', 'fashion', 'outfit', 'nails', 'hair',
+        'asmr', 'slime', 'satisfying', 'cat', 'cats', 'dog', 'dogs', 'pets', 'animals',
+        'food', 'foodporn', 'cooking', 'recipe', 'foodtok', 'restaurant',
+        'workout', 'gym', 'gymtok', 'fitness', 'bodybuilding',
+        'pov', 'skit', 'comedy', 'funny', 'meme', 'humor', 'jokes',
+        'prank', 'storytime', 'gossip', 'drama', 'tea', 'relationship',
+        'sports', 'football', 'basketball', 'soccer', 'nba', 'nfl',
+        'music', 'song', 'singing', 'dance challenge',
+        'lifehack', 'travel', 'wedding', 'gaming', 'minecraft', 'fortnite'
+      ],
+      learn: [
+        'dance', 'makeup', 'beauty', 'fashion', 'outfit', 'nails',
+        'comedy', 'funny', 'meme', 'humor', 'jokes', 'pov', 'skit',
+        'asmr', 'slime', 'satisfying', 'prank',
+        'storytime', 'gossip', 'drama', 'tea', 'relationship',
+        'gaming', 'sports', 'wedding', 'travel'
+      ],
+      cooking: [
+        'dance', 'makeup', 'beauty', 'fashion', 'outfit', 'nails',
+        'workout', 'gym', 'fitness', 'bodybuilding',
+        'startup', 'business', 'finance', 'crypto', 'stocks',
+        'asmr', 'slime', 'sleep',
+        'pov', 'skit', 'comedy', 'funny', 'meme', 'prank',
+        'gaming', 'sports', 'music', 'singing',
+        'travel', 'wedding', 'tutorial' // tutorial often = makeup/dance tutorial
+      ],
+      laugh: [
+        'recipe', 'cooking', 'foodtok',
+        'workout', 'gym', 'fitness', 'cardio',
+        'tutorial', 'study', 'studytok', 'history', 'science', 'edu',
+        'startup', 'business', 'finance', 'investing', 'crypto',
+        'news', 'politics', 'asmr', 'sleep', 'wholesome'
+      ],
+      hype: [
+        'asmr', 'slime', 'sleep', 'wholesome',
+        'cooking', 'recipe', 'foodtok',
+        'startup', 'tutorial', 'study',
+        'sad', 'cry', 'breakup', 'gossip', 'drama', 'storytime',
+        'news', 'politics', 'gaming'
+      ],
+      wind_down: [
+        'workout', 'gym', 'fitness', 'cardio', 'hiit',
+        'hustle', 'grind', 'startup', 'business', 'finance',
+        'comedy', 'meme', 'prank', 'funny',
+        'news', 'politics', 'sports', 'gaming', 'fortnite', 'minecraft',
+        'dance challenge', 'shock', 'fight'
+      ],
+      brain_rot: [
+        'startup', 'business', 'finance', 'tutorial', 'study',
+        'history', 'science', 'edu', 'learnontiktok',
+        'news', 'politics', 'documentary'
+      ],
+      food_porn: [
+        'dance', 'workout', 'gym', 'startup', 'finance',
+        'tutorial', 'study', 'history', 'science',
+        'sports', 'gaming', 'news', 'politics', 'comedy', 'skit', 'pov'
+      ],
+      larp: [
+        'cooking', 'recipe', 'foodtok',
+        'dance', 'dancing', 'makeup', 'beauty', 'nails', 'hair',
+        'comedy', 'meme', 'skit', 'prank',
+        'tutorial', 'study', 'history', 'science', 'edu',
+        'gaming', 'minecraft', 'fortnite',
+        'asmr', 'slime', 'sleep', 'wholesome',
+        'news', 'politics'
+      ],
+      fitness: [
+        'cooking', 'recipe', 'foodtok',
+        'startup', 'business', 'finance', 'crypto',
+        'tutorial', 'study', 'history', 'science', 'edu',
+        'gaming', 'minecraft', 'fortnite',
+        'asmr', 'slime', 'sleep', 'wholesome',
+        'news', 'politics', 'comedy', 'meme', 'skit', 'prank',
+        'dance challenge'
+      ],
+      baddies: [
+        'cooking', 'recipe', 'foodtok',
+        'startup', 'business', 'finance', 'crypto',
+        'tutorial', 'study', 'history', 'science', 'edu',
+        'gaming', 'minecraft', 'fortnite',
+        'asmr', 'slime', 'sleep',
+        'news', 'politics',
+        'wholesome', 'family'
+      ],
+      // custom / auto_scroll — no pre-skip; rely on API
+    };
+
+    // ---------- INIT ----------
+    chrome.storage.local.get(['currentMode', 'customDescription', 'autoEngage', 'sidekickActive']).then(r => {
+      currentMode = r.currentMode || null;
+      customDescription = r.customDescription || '';
+      autoEngage = r.autoEngage !== false; // default true
+      sidekickActive = !!r.sidekickActive;
+      if (sidekickActive) applySidekickCSS();
+      updateOverlayState();
     });
-    
-    // Check pomodoro status from background script
-    function checkPomodoroStatus() {
-      console.log('Checking pomodoro status...');
-      browser.runtime.sendMessage({ type: 'GET_POMODORO_STATUS' })
-        .then(async status => {
-          console.log('Got pomodoro status:', status);
-          if (status && status.isActive) {
-            isPomodoroActive = true;
-            pomodoroRemainingMinutes = status.remaining.minutes;
-            pomodoroRemainingSeconds = status.remaining.seconds;
-            pomodoroDuration = status.duration;
-            
-            const remainingMs = (status.remaining.minutes * 60 + status.remaining.seconds) * 1000;
-            pomodoroEndTime = Date.now() + remainingMs;
-            
-            await createPomodoroOverlay(); // Ensure overlay is ready
 
-            updatePomodoroDisplay(status.remaining.minutes, status.remaining.seconds, status.duration, status.isBreak);
-            console.log('CONTENT SCRIPT: Attempting to show pomodoro overlay from checkPomodoroStatus. Overlay object:', pomodoroOverlay, 'Status isActive:', status.isActive);
-            if (pomodoroOverlay) {
-              pomodoroOverlay.style.setProperty('display', 'block', 'important'); // Ensure display:block overrides other styles
-              console.log('CONTENT SCRIPT: Set pomodoro overlay display to block from checkPomodoroStatus. Current display style:', pomodoroOverlay.style.display);
-            } else {
-              console.error('CONTENT SCRIPT: pomodoroOverlay is null or undefined when trying to show it in checkPomodoroStatus.');
-            }
-            
-            if (status.isBreak && pomodoroOverlay) {
-              console.log('CONTENT SCRIPT: Setting break styling on refresh.');
-              pomodoroOverlay.style.backgroundColor = 'rgba(33, 150, 243, 0.85)';
-              const iconElement = pomodoroOverlay.querySelector('.pomodoro-icon');
-              if (iconElement) iconElement.textContent = '☕';
-            }
-            
-            startLocalPomodoroUpdate();
-          } else {
-            isPomodoroActive = false;
-            if (pomodoroOverlay) pomodoroOverlay.style.display = 'none';
-            stopLocalPomodoroUpdate();
-          }
-        })
-        .catch(err => {
-          console.error('Error checking pomodoro status:', err);
-        });
-    }
-    
-    // Create pomodoro timer overlay
-    function createPomodoroOverlay(): Promise<void> {
-      return new Promise((resolve) => {
-        if (pomodoroOverlay && (document.body.contains(pomodoroOverlay) || (document.documentElement && document.documentElement.contains(pomodoroOverlay)))) {
-          console.log('CONTENT SCRIPT: Pomodoro overlay already exists in DOM.');
-          resolve();
-          return;
-        }
-
-        if (pomodoroOverlay) { // Exists but not in DOM (detached)
-          try {
-            pomodoroOverlay.remove();
-            console.log('CONTENT SCRIPT: Removed detached pomodoroOverlay before recreating.');
-          } catch (e) {
-            console.error('CONTENT SCRIPT: Error removing detached pomodoroOverlay:', e);
-          }
-        }
-        
-        console.log('CONTENT SCRIPT: Creating new pomodoro overlay element.');
-        pomodoroOverlay = document.createElement('div');
-        pomodoroOverlay.id = 'pomodoro-timer-overlay';
-        // Base CSS - will be customized below
-        let cssText = `
-          position: fixed;
-          background-color: rgba(76, 175, 80, 0.85);
-          color: white;
-          padding: 6px 10px;
-          border-radius: 20px;
-          font-weight: bold;
-          z-index: 2147483647 !important; /* Maximum z-index to ensure visibility, added !important */
-          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-          display: none; /* Start hidden, will be shown by handler */
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-          backdrop-filter: blur(2px);
-          -webkit-backdrop-filter: blur(2px);
-          cursor: pointer;
-          transition: all 0.2s ease;
-          border: 1px solid rgba(255, 255, 255, 0.3);
-          font-size: 12px;
-        `;
-        pomodoroOverlay.style.cssText = cssText; // Apply the base CSS string
-        
-        // Detect PDF files - both local files and web-served PDFs
-        const isPdfFile = checkIfPdf();
-        // The detailed log is now in checkIfPdf, so this one can be simpler or removed.
-        console.log(`CONTENT SCRIPT: createPomodoroOverlay: isPdfFile = ${isPdfFile}`);
-
-        if (isPdfFile) {
-          pomodoroOverlay.style.setProperty('position', 'fixed', 'important');
-          pomodoroOverlay.style.setProperty('bottom', '20px', 'important');
-          pomodoroOverlay.style.setProperty('right', '20px', 'important');
-          pomodoroOverlay.style.setProperty('top', 'unset', 'important');
-          pomodoroOverlay.style.setProperty('left', 'unset', 'important');
-          console.log('CONTENT SCRIPT: Applied PDF positioning styles with !important.');
-        } else {
-          pomodoroOverlay.style.top = '20px';
-          pomodoroOverlay.style.right = '20px';
-          pomodoroOverlay.style.bottom = 'unset';
-          pomodoroOverlay.style.left = 'unset';
-          console.log('CONTENT SCRIPT: Applied non-PDF positioning styles.');
-        }
-        // Opacity and animation will be handled when shown
-        
-        let pomodoroStyle = document.getElementById('pomodoro-animation-style');
-        if (!pomodoroStyle) {
-          pomodoroStyle = document.createElement('style');
-          pomodoroStyle.id = 'pomodoro-animation-style';
-          pomodoroStyle.innerHTML = `
-            @keyframes pomodoroFadeInUp {
-              0% { opacity: 0; transform: translateY(10px); }
-              100% { opacity: 1; transform: translateY(0); }
-            }
-            @keyframes pomodoroFadeInDown {
-              0% { opacity: 0; transform: translateY(-10px); }
-              100% { opacity: 1; transform: translateY(0); }
-            }
-          `;
-          document.head.appendChild(pomodoroStyle);
-        }
-        
-        pomodoroOverlay.innerHTML = `
-          <div style="display: flex; align-items: center;">
-            <div class="pomodoro-icon" style="margin-right: 5px; font-size: 14px;">🍅</div>
-            <div id="pomodoro-time" style="font-size: 12px; font-weight: bold;">00:00/00:00</div>
-            <div style="margin-left: 5px; font-size: 10px; opacity: 0.8;">✕</div>
-          </div>
-        `;
-        
-        pomodoroOverlay.addEventListener('click', () => {
-          if (confirm('Stop pomodoro timer?')) {
-            stopLocalPomodoroUpdate();
-            if (pomodoroOverlay) pomodoroOverlay.style.display = 'none';
-            browser.runtime.sendMessage({ type: 'STOP_POMODORO' })
-              .catch(err => console.error('Error stopping pomodoro:', err));
-            isPomodoroActive = false;
-          }
-        });
-        
-        pomodoroOverlay.addEventListener('mouseenter', () => {
-          browser.runtime.sendMessage({ type: 'GET_POMODORO_STATUS' })
-            .then(status => {
-              if (status && status.isActive) {
-                pomodoroOverlay.style.backgroundColor = status.isBreak ? 'rgba(33, 150, 243, 1)' : 'rgba(76, 175, 80, 1)';
-              } else {
-                pomodoroOverlay.style.backgroundColor = 'rgba(76, 175, 80, 1)';
-              }
-            })
-            .catch(() => { pomodoroOverlay.style.backgroundColor = 'rgba(76, 175, 80, 1)'; });
-          pomodoroOverlay.style.transform = 'scale(1.05)';
-        });
-        
-        pomodoroOverlay.addEventListener('mouseleave', () => {
-          browser.runtime.sendMessage({ type: 'GET_POMODORO_STATUS' })
-            .then(status => {
-              if (status && status.isActive) {
-                pomodoroOverlay.style.backgroundColor = status.isBreak ? 'rgba(33, 150, 243, 0.85)' : 'rgba(76, 175, 80, 0.85)';
-              } else {
-                 pomodoroOverlay.style.backgroundColor = 'rgba(76, 175, 80, 0.85)';
-              }
-            })
-            .catch(() => { pomodoroOverlay.style.backgroundColor = 'rgba(76, 175, 80, 0.85)'; });
-          pomodoroOverlay.style.transform = 'scale(1)';
-        });
-
-        const parentElement = isPdfFile ? document.documentElement : document.body;
-
-        const tryAppendAndResolve = () => {
-          if (parentElement) {
-            if (!parentElement.contains(pomodoroOverlay)) {
-              parentElement.appendChild(pomodoroOverlay);
-              console.log(`CONTENT SCRIPT: Pomodoro overlay appended to ${isPdfFile ? 'document.documentElement' : 'document.body'}.`);
-            }
-            // Apply animation when it's about to be shown
-            if (isPdfFile) {
-                pomodoroOverlay.style.animation = 'pomodoroFadeInUp 0.3s ease-out';
-                console.log('CONTENT SCRIPT: Applying PDF animation (FadeInUp).');
-            } else {
-                pomodoroOverlay.style.animation = 'pomodoroFadeInDown 0.3s ease-out';
-                console.log('CONTENT SCRIPT: Applying non-PDF animation (FadeInDown).');
-            }
-            pomodoroOverlay.style.opacity = '1'; // Ensure opacity is set
-            resolve();
-          } else {
-            console.log(`CONTENT SCRIPT: ${isPdfFile ? 'document.documentElement' : 'document.body'} not ready, retrying append Pomodoro overlay.`);
-            setTimeout(tryAppendAndResolve, 100);
-          }
-        };
-        tryAppendAndResolve();
-      });
-    }
-    
-    // Initialize pomodoro immediately
-    async function initializePomodoroFeatures() {
-      console.log('Initializing pomodoro features...');
-      await createPomodoroOverlay(); // Await creation
-      console.log('CONTENT SCRIPT: Pomodoro overlay ensured by initializePomodoroFeatures.');
-      
-      setTimeout(() => {
-        checkPomodoroStatus();
-      }, 1000); // Keep delay for initial status check after load
-    }
-    
-    // Execute initialization immediately for pomodoro features
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', () => initializePomodoroFeatures().catch(console.error));
-    } else {
-      initializePomodoroFeatures().catch(console.error);
-    }
-    
-    // Also call getSettings immediately to initialize scroll blocking features
-    getSettings();
-    
-    // Update the pomodoro display
-    function updatePomodoroDisplay(minutes: number, seconds: number, duration: number, isBreak?: boolean) {
-      pomodoroRemainingMinutes = minutes;
-      pomodoroRemainingSeconds = seconds;
-      pomodoroDuration = duration;
-      
-      // Format time as MM:SS/MM:00
-      const timeDisplay = document.getElementById('pomodoro-time');
-      if (timeDisplay) {
-        const formattedMinutes = String(minutes).padStart(2, '0');
-        const formattedSeconds = String(seconds).padStart(2, '0');
-        const formattedTotal = String(duration).padStart(2, '0');
-        timeDisplay.textContent = `${formattedMinutes}:${formattedSeconds}/${formattedTotal}:00`;
-        
-        // Update styling based on break status
-        if (pomodoroOverlay) {
-          if (isBreak) {
-            pomodoroOverlay.style.backgroundColor = 'rgba(33, 150, 243, 0.85)';
-            const iconElement = pomodoroOverlay.querySelector('.pomodoro-icon');
-            if (iconElement) iconElement.textContent = '☕';
-          } else {
-            pomodoroOverlay.style.backgroundColor = 'rgba(76, 175, 80, 0.85)';
-            const iconElement = pomodoroOverlay.querySelector('.pomodoro-icon');
-            if (iconElement) iconElement.textContent = '🍅';
-          }
-        }
-      } else {
-        // If the element doesn't exist yet, we might need to recreate the overlay
-        createPomodoroOverlay();
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg.type === 'set_mode') {
+        currentMode = msg.mode;
+        lastClassifiedVideoSrc = null;
+        resetPhase();
+        updateOverlayState();
       }
-    }
-    
-    // Get settings from storage
-    async function getSettings() {
-      const result = await browser.storage.sync.get({
-        maxScrolls: 30, // Fallback to 30
-        scrollCounts: {}, // New object structure for per-domain counts
-        distractingSites: ['youtube.com', 'x.com', 'reddit.com','instagram.com','facebook.com'], // Fallback
-        resetInterval: 0,
-        lastResetTime: Date.now(),        customLimits: {}, // Custom scroll limits per domain
-        youtubeSettings: { hideShorts: false, hideHomeFeed: false }, // YouTube-specific settings
-        instagramSettings: { hideReels: false }, // Instagram-specific settings
-        adBlockerCompatMode: true, // Enable compatibility mode for ad blockers
-        videoOverlaySettings: { // Video overlay settings for X.com
-          enabled: true,
-          opacity: 0.9,
-          autoPlayOnReveal: false,
-          buttonText: 'View Video',
-          buttonColor: '#1DA1F2'
-        }
-      });
-      
-      maxScrolls = result.maxScrolls;
-      distractingSites = result.distractingSites;
-      resetInterval = result.resetInterval;      lastResetTime = result.lastResetTime;
-      customLimits = result.customLimits;
-      youtubeSettings = result.youtubeSettings;
-      instagramSettings = result.instagramSettings;
-      adBlockerCompatMode = result.adBlockerCompatMode;
-      videoOverlaySettings = result.videoOverlaySettings;
-      
-      // Only proceed with scroll blocking features if current site is in the distracting sites list
-      if (!isDistractingSite()) {
-        console.log(`ScrollStop not active on ${currentHost} (not in distraction list)`);
-        return;
+      if (msg.type === 'stop') {
+        currentMode = null;
+        lastClassifiedVideoSrc = null;
+        resetPhase();
+        updateOverlayState();
       }
-      
-      const domain = getMatchingDomain();
-      scrollCount = result.scrollCounts[domain] || 0;
-      
-      const effectiveLimit = getEffectiveScrollLimit();
-      console.log(`ScrollStop loaded on ${currentHost}, current scrolls: ${scrollCount}/${effectiveLimit} ${customLimits[domain] ? '(custom limit)' : '(global limit)'}`);
-      
-      // Add elements to DOM now that we know this is a distracting site
-      document.body.appendChild(overlay);
-      document.body.appendChild(pendingOverlay);
-      document.body.appendChild(counter);
-      counter.style.display = 'block';
-      
-      // Initialize AI Content Analysis
-      await initializeAIAnalysis();
-      
-      // Initialize Video Overlay Manager for X.com
-      initializeVideoOverlay();
-      
-      // Check if we should block based on current count
-      const effectiveMax = getEffectiveScrollLimit();
-      if (scrollCount >= effectiveMax) {
-        // Fallback mechanism: if we're at the limit but haven't done analysis yet, force it
-        if (!hasTriggeredAIAnalysis && (aiAnalyzer && contentScraper)) {
-          console.log('AI CONTENT: Fallback analysis triggered at scroll limit');
-          performAIAnalysis();
-          hasTriggeredAIAnalysis = true;
-        }
-        setScrollBlocking(true);
-      }
-      
-      // Check if reset should happen based on time
-      checkTimeBasedReset();
-      
-      // Set up scroll event listener
-      setupScrollListener();
-      
-      // Update counter
-      updateCounter();
-      
-      // Start timer updates immediately if reset interval is enabled
-      if (resetInterval > 0) {
-        startTimerUpdates();
-      }        // Apply YouTube-specific features if on YouTube
-        if (currentHost.includes('youtube.com')) {
-          console.log('Applying YouTube-specific settings:', youtubeSettings);
-          injectYoutubeStylesheet();
-          setupYoutubeObserver();
-          handleYoutubeHomeRedirect();
-        }
+    });
 
-        // Apply Instagram-specific features if on Instagram
-        if (currentHost.includes('instagram.com')) {
-          console.log('Applying Instagram-specific settings:', instagramSettings);
-          handleInstagramReelsRedirect();
-        }
-      
-      // Periodically sync scroll count with storage to prevent inconsistencies
-      setInterval(syncScrollCount, 10000); // Sync every 10 seconds
-    }
-    
-    // Initialize Video Overlay Manager
-    function initializeVideoOverlay() {
-      if (!videoOverlaySettings.enabled) {
-        console.log('VIDEO OVERLAY: Video overlay disabled');
-        return;
-      }
-      
-      // Only initialize on X.com/Twitter
-      const currentDomain = window.location.hostname.replace(/^www\./, '');
-      if (!currentDomain.includes('x.com') && !currentDomain.includes('twitter.com')) {
-        console.log('VIDEO OVERLAY: Not on X.com/Twitter, skipping video overlay');
-        return;
-      }
-      
-      try {
-        // Destroy existing manager if it exists
-        if (videoOverlayManager) {
-          videoOverlayManager.destroy();
-        }
-        
-        // Create new video overlay manager
-        videoOverlayManager = new VideoOverlayManager(videoOverlaySettings);
-        videoOverlayManager.initialize();
-        
-        console.log('VIDEO OVERLAY: Manager initialized successfully for X.com');
-      } catch (error) {
-        console.error('VIDEO OVERLAY: Failed to initialize:', error);
-      }
-    }
-    
-    // Initialize AI Content Analysis system
-    async function initializeAIAnalysis() {
-      if (!aiAnalysisEnabled) {
-        console.log('AI CONTENT: Analysis disabled');
-        return;
-      }
-
-      try {
-        console.log('AI CONTENT: Initializing analysis system...');
-        
-        // Initialize content scraper
-        const scrapingConfig: ScrapingConfig = {
-          distractingSites: distractingSites,
-          enabled: aiAnalysisEnabled,
-          minScrollsForAnalysis: 2
-        };
-        
-        contentScraper = new GeneralScraper(scrapingConfig);
-        
-        // Initialize AI analyzer
-        aiAnalyzer = new AIContentAnalyzer(DEFAULT_ANALYZER_CONFIG);
-        
-        // Test AI connection
-        console.log('AI CONTENT: Testing backend connection...');
-        const connectionTest = await aiAnalyzer.testConnection();
-        if (!connectionTest) {
-          console.warn('AI CONTENT: Connection test failed, but continuing with fallback');
-        } else {
-          console.log('AI CONTENT: Backend connection test successful');
-        }
-        
-        // Initialize the scraper
-        const scraperInitialized = contentScraper.initialize();
-        if (scraperInitialized) {
-          console.log('AI CONTENT: Analysis system initialized successfully for domain:', getMatchingDomain());
-          console.log('AI CONTENT: Scraper ready for final scroll capture');
-        } else {
-          console.log('AI CONTENT: Scraper not initialized (site not monitored or disabled)');
-          contentScraper = null;
-          aiAnalyzer = null;
-        }
-        
-      } catch (error) {
-        console.error('AI CONTENT: Failed to initialize analysis system:', error);
-        contentScraper = null;
-        aiAnalyzer = null;
-      }
-    }
-
-    // Perform AI content analysis and apply recommendations
-    async function performAIAnalysis() {
-      if (!contentScraper || !aiAnalyzer || hasTriggeredAIAnalysis || isAnalysisInProgress) {
-        return;
-      }
-
-      try {
-        console.log('AI CONTENT: Starting content analysis...');
-        isAnalysisInProgress = true; // Set lock
-        hasTriggeredAIAnalysis = true;
-        
-        // Show analysis indicator
-        showAIAnalysisIndicator(true);
-        
-        // Get scraped content for analysis
-        const scrapingResult = contentScraper.getContentForAnalysis();
-        
-        if (!scrapingResult.success || !scrapingResult.data) {
-          console.log('AI CONTENT: Not enough content for analysis');
-          showAIAnalysisIndicator(false);
-          return;
-        }
-
-        // Additional validation: ensure minimum content length
-        if (scrapingResult.data.length < 100) {
-          console.log('AI CONTENT: Content too short for meaningful analysis:', scrapingResult.data.length, 'characters');
-          showAIAnalysisIndicator(false);
-          return;
-        }
-
-        console.log('AI CONTENT: Content validated for analysis:', scrapingResult.data.length, 'characters');
-
-        // Analyze content with AI
-        const analysisResult = await aiAnalyzer.analyzeContent(
-          scrapingResult.data,
-          {
-            scrollCount: scrollCount,
-            maxScrolls: getEffectiveScrollLimit(),
-            domain: getMatchingDomain(),
-            scrollStartTime: scrollStartTime
-          }
-        );
-
-        showAIAnalysisIndicator(false);
-
-        if (analysisResult.success && analysisResult.analysis) {
-          console.log('AI CONTENT: Analysis completed:', analysisResult.analysis);
-          
-          // Apply AI recommendations with pattern tracking
-          const domain = getMatchingDomain();
-          const recommendations = aiAnalyzer.applyRecommendations(
-            analysisResult.analysis,
-            getEffectiveScrollLimit(),
-            domain,
-            scrollCount
-          );
-          
-          // Check if we should end grace period based on results
-          let grantedBonusScrolls = false;
-          
-          console.log(`AI CONTENT: Processing recommendations:`, {
-            recommendedAction: analysisResult.analysis.recommended_action,
-            backendBonusScrolls: analysisResult.analysis.bonus_scrolls,
-            currentScrollCount: scrollCount,
-            currentEffectiveLimit: getEffectiveScrollLimit(),
-            recommendedNewMaxScrolls: recommendations.newMaxScrolls,
-            addictionRisk: analysisResult.analysis.addiction_risk,
-            educationalValue: analysisResult.analysis.educational_value
-          });
-          
-          // Update scroll limit if bonus scrolls awarded
-          if (recommendations.newMaxScrolls > getEffectiveScrollLimit()) {
-            const currentLimit = getEffectiveScrollLimit();
-            const bonusScrolls = recommendations.newMaxScrolls - currentLimit;
-            
-            // Add temporary bonus scrolls for this domain (does not persist across resets)
-            temporaryBonusScrolls[domain] = (temporaryBonusScrolls[domain] || 0) + bonusScrolls;
-            
-            console.log(`AI CONTENT: Added ${bonusScrolls} temporary bonus scrolls. New effective limit: ${getEffectiveScrollLimit()}`);
-            updateCounter();
-            grantedBonusScrolls = true;
-          } else {
-            console.log(`AI CONTENT: No bonus scrolls granted. Backend sent ${analysisResult.analysis.bonus_scrolls} bonus_scrolls, but recommended action was "${analysisResult.analysis.recommended_action}"`);
-          }
-          
-          // End grace period if active
-          if (isInGracePeriod) {
-            endGracePeriod(true);
-            
-            // If no bonus scrolls were granted and user exceeded their original limit, block now
-            if (!grantedBonusScrolls && scrollCount >= getEffectiveScrollLimit()) {
-              setScrollBlocking(true);
-            }
-          }
-          
-          // Show recommendation overlay if needed
-          if (recommendations.shouldShowOverlay) {
-            showAIRecommendationOverlay(recommendations);
-          }
-          
-          // Log pattern information if available
-          if (recommendations.userPattern) {
-            console.log(`AI CONTENT: User pattern detected: ${recommendations.userPattern}`);
-          }
-          
-        } else {
-          console.error('AI CONTENT: Analysis failed:', analysisResult.error);
-          
-          // End grace period on analysis failure
-          if (isInGracePeriod) {
-            endGracePeriod(false);
-          }
-        }
-        
-      } catch (error) {
-        console.error('AI CONTENT: Error during AI analysis:', error);
-        showAIAnalysisIndicator(false);
-      } finally {
-        isAnalysisInProgress = false; // Always clear lock
-      }
-    }
-
-    // Show AI analysis indicator
-    function showAIAnalysisIndicator(show: boolean) {
-      let indicator = document.getElementById('ai-analysis-indicator');
-      
-      if (show && !indicator) {
-        indicator = document.createElement('div');
-        indicator.id = 'ai-analysis-indicator';
-        indicator.innerHTML = '🤖 Analyzing content...';
-        indicator.style.cssText = `
-          position: fixed;
-          top: 20px;
-          right: 20px;
-          background-color: rgba(76, 175, 80, 0.9);
-          color: white;
-          padding: 10px 15px;
-          border-radius: 8px;
-          font-weight: bold;
-          z-index: 10000;
-          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-          font-size: 14px;
-          box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-        `;
-        document.body.appendChild(indicator);
-      } else if (!show && indicator) {
-        indicator.remove();
-      }
-    }
-
-    // Grace period management functions
-    function startGracePeriod() {
-      isInGracePeriod = true;
-      gracePeriodScrollsUsed = 0;
-      gracePeriodStartTime = Date.now();
-      
-      // Show pending analysis overlay
-      pendingOverlay.style.display = 'block';
-      updateGracePeriodUI();
-      
-      console.log('GRACE PERIOD: Started - allowing up to', maxGracePeriodScrolls, 'extra scrolls');
-      
-      // Set timeout to end grace period if analysis takes too long
-      setTimeout(() => {
-        if (isInGracePeriod) {
-          console.log('GRACE PERIOD: Timeout - ending grace period');
-          endGracePeriod(false);
-        }
-      }, maxGracePeriodDuration);
-    }
-    
-    function updateGracePeriodUI() {
-      const remainingScrolls = maxGracePeriodScrolls - gracePeriodScrollsUsed;
-      const graceScrollsElement = document.getElementById('grace-scrolls-remaining');
-      if (graceScrollsElement) {
-        graceScrollsElement.textContent = remainingScrolls.toString();
-      }
-    }
-    
-    function endGracePeriod(wasSuccessful: boolean) {
-      if (!isInGracePeriod) return;
-      
-      isInGracePeriod = false;
-      pendingOverlay.style.display = 'none';
-      
-      console.log('GRACE PERIOD: Ended -', wasSuccessful ? 'Analysis completed' : 'Timeout/limit reached');
-      
-      // If grace period ended without success (timeout or limit exceeded), block immediately
-      if (!wasSuccessful) {
-        setScrollBlocking(true);
-      }
-    }
-    
-    function useGraceScroll(): boolean {
-      if (!isInGracePeriod) return false;
-      
-      gracePeriodScrollsUsed++;
-      updateGracePeriodUI();
-      
-      console.log(`GRACE PERIOD: Used ${gracePeriodScrollsUsed}/${maxGracePeriodScrolls} grace scrolls`);
-      
-      // Check if grace period limit exceeded
-      if (gracePeriodScrollsUsed >= maxGracePeriodScrolls) {
-        console.log('GRACE PERIOD: Limit exceeded - ending grace period');
-        endGracePeriod(false);
-        return false;
-      }
-      
-      return true;
-    }
-
-    // Show AI recommendation overlay with enhanced pattern information
-    function showAIRecommendationOverlay(recommendations: any) {
-      let aiOverlay = document.getElementById('ai-recommendation-overlay');
-      
-      if (aiOverlay) {
-        aiOverlay.remove();
-      }
-      
-      aiOverlay = document.createElement('div');
-      aiOverlay.id = 'ai-recommendation-overlay';
-      
-      // Enhanced styling with pattern-aware colors
-      const getPatternColor = (type: string) => {
-        switch (type) {
-          case 'encouragement':
-            return 'rgba(76, 175, 80, 0.95)'; // Green for positive patterns
-          case 'break':
-            return 'rgba(244, 67, 54, 0.95)'; // Red for break needed
-          case 'warning':
-            return 'rgba(255, 152, 0, 0.95)'; // Orange for warnings
-          default:
-            return 'rgba(33, 150, 243, 0.95)'; // Blue for neutral
-        }
-      };
-      
-      aiOverlay.style.cssText = `
-        position: fixed;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        background-color: ${getPatternColor(recommendations.overlayType)};
-        color: white;
-        padding: 30px;
-        border-radius: 15px;
-        max-width: 500px;
-        text-align: center;
-        z-index: 2147483646;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-        backdrop-filter: blur(10px);
-      `;
-      
-      // Get pattern emoji for display
-      const getPatternEmoji = (pattern: string) => {
-        const emojiMap: Record<string, string> = {
-          'Deep Focus/Learning': '🎯',
-          'Active Socializing': '👥', 
-          'Intentional Leisure': '😊',
-          'Casual Browsing/Catch-up': '📱',
-          'Passive Consumption/Doomscrolling': '⚠️',
-          'Anxiety-Driven Information Seeking': '😰'
-        };
-        return emojiMap[pattern] || '📱';
-      };
-      
-      const patternDisplay = recommendations.userPattern 
-        ? `<div style="font-size: 14px; margin-bottom: 10px; opacity: 0.9;">
-             ${getPatternEmoji(recommendations.userPattern)} Pattern: ${recommendations.userPattern}
-           </div>`
-        : '';
-      
-      aiOverlay.innerHTML = `
-        ${patternDisplay}
-        <div style="font-size: 18px; margin-bottom: 15px; font-weight: bold;">
-          ${recommendations.overlayMessage}
-        </div>
-        <button id="ai-overlay-close" style="
-          background-color: rgba(255,255,255,0.2);
-          border: 2px solid white;
-          color: white;
-          padding: 10px 20px;
-          border-radius: 8px;
-          cursor: pointer;
-          font-size: 14px;
-          font-weight: bold;
-          transition: all 0.2s ease;
-        " onmouseover="this.style.backgroundColor='rgba(255,255,255,0.3)'" 
-           onmouseout="this.style.backgroundColor='rgba(255,255,255,0.2)'">Continue</button>
-      `;
-      
-      document.body.appendChild(aiOverlay);
-      
-      // Auto-close after 7 seconds (increased for pattern info) or on click
-      const closeBtn = document.getElementById('ai-overlay-close');
-      const closeOverlay = () => {
-        if (aiOverlay) aiOverlay.remove();
-      };
-      
-      if (closeBtn) {
-        closeBtn.addEventListener('click', closeOverlay);
-      }
-      
-      setTimeout(closeOverlay, 7000);
-    }
-
-    // Check if we should reset based on time
-    function checkTimeBasedReset() {
-      if (resetInterval <= 0) return; // Skip if disabled
-      
-      const now = Date.now();
-      const timeSinceReset = now - lastResetTime;
-      const resetIntervalMs = resetInterval * 60 * 1000; // Convert minutes to ms
-      
-      if (timeSinceReset >= resetIntervalMs) {
-        // Reset the scroll count
-        scrollCount = 0;
-        // Unblock scrolling if it was blocked
-        setScrollBlocking(false);
-        // Update the last reset time
-        lastResetTime = now;
-        // Reset AI analysis flag
-        hasTriggeredAIAnalysis = false;
-        isAnalysisInProgress = false;
-        // --- START: Reset new state variables ---
-        isScrapingFinalScrolls = false;
-        finalScrollsScrapedCount = 0;
-        // --- END: Reset new state variables ---
-        
-        // Reset grace period state
-        if (isInGracePeriod) {
-          endGracePeriod(true);
-        }
-        isInGracePeriod = false;
-        gracePeriodScrollsUsed = 0;
-        
-        // Clear scraper buffer
-        if (contentScraper) {
-          contentScraper.clearBuffer();
-        }
-        // Clear temporary bonus scrolls
-        temporaryBonusScrolls = {};
-        
-        // Use background script to ensure the reset is properly persisted
-        browser.runtime.sendMessage({
-          type: 'RESET_COUNTER'
-        }).then(() => {
-          console.log('Timer-based reset completed and persisted to storage');
-          updateCounter();
-        }).catch(err => {
-          console.error('Error during timer-based reset:', err);
-          // Fallback to direct storage update if the message fails
-          saveScrollCount();
-        });
-      }
-    }
-    
-    // Increment scroll count and save to storage via background script
-    function incrementScrollCount() {
-      const domain = getMatchingDomain();
-      
-      console.log(`SCROLL: Incrementing count for domain: ${domain}, current: ${scrollCount}`);
-      
-      // Use the background script to handle the storage update
-      browser.runtime.sendMessage({
-        type: 'INCREMENT_SCROLL',
-        domain: domain
-      }).then(response => {
-        if (response && response.success) {
-          scrollCount = response.newCount;
-          updateCounter();
-          
-          const effectiveMax = getEffectiveScrollLimit();
-          const scrollsRemaining = effectiveMax - scrollCount;
-          
-          console.log(`SCROLL: Updated count - current: ${scrollCount}, remaining: ${scrollsRemaining}, effective max: ${effectiveMax}`);
-          
-          // --- START: New Final Scrolls Scraping Logic ---
-          if (aiAnalyzer && contentScraper && !hasTriggeredAIAnalysis) {
-            // Check if we should START scraping the final scrolls
-            if (!isScrapingFinalScrolls && scrollsRemaining <= FINAL_SCROLLS_TO_SCRAPE) {
-              console.log(`AI CONTENT: Entering final scroll scraping phase. Clearing buffer.`);
-              isScrapingFinalScrolls = true;
-              contentScraper.clearBuffer(); // Clear any old data
-            }
-
-            // If we are in the final scraping phase, capture content
-            if (isScrapingFinalScrolls) {
-              try {
-                contentScraper.captureCurrentContent();
-                finalScrollsScrapedCount++;
-                console.log(`AI CONTENT: Captured final scroll ${finalScrollsScrapedCount}/${FINAL_SCROLLS_TO_SCRAPE}.`);
-              } catch (error) {
-                console.error('SCROLL: Error capturing final scroll content:', error);
-              }
-
-              // If we have scraped enough final scrolls, trigger the analysis
-              if (finalScrollsScrapedCount >= FINAL_SCROLLS_TO_SCRAPE) {
-                console.log(`AI CONTENT: All ${FINAL_SCROLLS_TO_SCRAPE} final scrolls captured. Triggering analysis.`);
-                performAIAnalysis();
-                hasTriggeredAIAnalysis = true; // Mark analysis as done
-              }
-            }
-          }
-          // --- END: New Final Scrolls Scraping Logic ---
-          
-          // Check against the effective limit (custom or global)
-          if (scrollCount >= effectiveMax) {
-            // If we're in grace period, check if we can use a grace scroll
-            if (isInGracePeriod) {
-              const canContinue = useGraceScroll();
-              if (!canContinue) {
-                // Grace period ended, block immediately
-                return;
-              }
-            } else {
-              // First time hitting limit - check if we should start grace period
-              const shouldStartGrace = isAnalysisInProgress || (!hasTriggeredAIAnalysis && aiAnalyzer && contentScraper);
-              
-              if (shouldStartGrace) {
-                // Start analysis if not already triggered
-                if (!hasTriggeredAIAnalysis && aiAnalyzer && contentScraper) {
-                  console.log('AI CONTENT: Analysis triggered at scroll limit');
-                  performAIAnalysis();
-                  hasTriggeredAIAnalysis = true;
-                }
-                
-                // Start grace period
-                startGracePeriod();
-              } else {
-                // No analysis available or already completed - block immediately
-                setScrollBlocking(true);
-              }
-            }
-          }
-        } else {
-          console.error('SCROLL: Failed to increment scroll count:', response);
-        }
-      }).catch(err => {
-        console.error('SCROLL: Error incrementing scroll count:', err);
-      });
-    }
-    
-    // Save scroll count to storage
-    function saveScrollCount() {
-      const domain = getMatchingDomain();
-      
-      // Get current scrollCounts first
-      browser.storage.sync.get(['scrollCounts']).then(result => {
-        const scrollCounts = result.scrollCounts || {};
-        scrollCounts[domain] = scrollCount;
-        
-        browser.storage.sync.set({ 
-          scrollCounts,
-          lastResetTime
-        }).then(() => {
-          updateCounter();
-        });
-      });
-    }
-    
-    function updateCounter() {
-      const effectiveMax = getEffectiveScrollLimit();
-      counter.textContent = `Scrolls: ${scrollCount}/${effectiveMax}`;
-
-      // Change counter color to red if 80% of scrolls are used (20% remaining)
-      const eightyPercentUsedThreshold = effectiveMax * 0.8;
-      if (effectiveMax > 0 && scrollCount >= eightyPercentUsedThreshold) {
-        counter.style.backgroundColor = 'rgba(244, 67, 54, 0.8)'; // Red color
-      } else {
-        counter.style.backgroundColor = 'rgba(29, 161, 242, 0.8)'; // Original blue color
-      }
-      
-      // Also update timer display if reset interval is enabled
-      if (resetInterval > 0) {
-        const now = Date.now();
-        const timeSinceReset = now - lastResetTime;
-        const resetIntervalMs = resetInterval * 60 * 1000;
-        const timeRemaining = Math.max(0, resetIntervalMs - timeSinceReset);
-        
-        // Convert to minutes and seconds
-        const minutesRemaining = Math.floor(timeRemaining / (60 * 1000));
-        const secondsRemaining = Math.floor((timeRemaining % (60 * 1000)) / 1000);
-        
-        const timerText = `Reset in: ${minutesRemaining}m ${secondsRemaining}s`;
-        counter.textContent += ` | ${timerText}`;
-        
-        // Update the timer in the overlay too
-        const overlayTimer = document.getElementById('scroll-stop-timer');
-        if (overlayTimer) {
-          overlayTimer.textContent = timerText;
-        }
-        
-        // Update hint text for reset timer
-        overlayHint.textContent = 'Your scroll limit will reset automatically.';
-      } else {
-        // If no reset timer is set, update the message accordingly
-        const overlayTimer = document.getElementById('scroll-stop-timer');
-        if (overlayTimer) {
-          overlayTimer.textContent = 'No auto-reset timer configured. Set one in the extension popup.';
-        }
-        
-        // Update hint text for manual reset
-        overlayHint.textContent = 'Close this tab or click the extension icon to reset your limit.';
-      }
-    }
-    
-    // Detect scrolling
-    function setupScrollListener() {
-      let lastScrollTop = window.scrollY;
-      let scrollTimeout: any;
-      let lastUrl = window.location.href;
-      let lastShortsId = extractShortsId(window.location.href);
-      
-      // Function to extract shorts ID from URL
-      function extractShortsId(url: string): string {
-        const shortsMatch = url.match(/\/shorts\/([^/?]+)/);
-        return shortsMatch ? shortsMatch[1] : '';
-      }
-      
-      // Implement a throttled scroll counter to avoid too many DOM operations
-      let isThrottled = false;
-      const throttleTime = 250; // ms
-      let wheelEventCount = 0; // Counter for wheel events
-      
-      // Simple scroll event for regular pages
-      window.addEventListener('scroll', () => {
-        if (isBlocked || isThrottled) return;
-        
-        isThrottled = true;
-        setTimeout(() => { isThrottled = false; }, throttleTime);
-        
-        clearTimeout(scrollTimeout);
-        scrollTimeout = window.setTimeout(() => {
-          const currentScrollTop = window.scrollY;
-          const scrollDelta = Math.abs(currentScrollTop - lastScrollTop);
-          
-          if (scrollDelta > 100) {
-            incrementScrollCount();
-          }
-          
-          lastScrollTop = currentScrollTop;
-        }, 300);
-      }, { passive: true }); // Add passive flag for better performance
-
-      // Simplified URL change detection for YouTube Shorts
-      if (currentHost.includes('youtube.com')) {
-        console.log('YouTube detected - setting up simplified Shorts tracking');
-        
-        const urlCheckInterval = setInterval(() => {
-          if (isBlocked) return;
-          
-          try {
-            const currentUrl = window.location.href;
-            
-            // Only handle URL changes - this avoids many DOM operations
-            if (currentUrl !== lastUrl) {
-              // Process YouTube URL change
-              handleYoutubeHomeRedirect();
-              
-              // Special handling for Shorts by ID comparison
-              const currentShortsId = extractShortsId(currentUrl);
-              const previousShortsId = lastShortsId;
-              
-              if (currentShortsId && (currentShortsId !== previousShortsId)) {
-                console.log(`YouTube Shorts navigation: ${previousShortsId || 'none'} → ${currentShortsId}`);
-                incrementScrollCount();
-                lastShortsId = currentShortsId;
-              }
-              
-              lastUrl = currentUrl;
-            }
-          } catch (err) {
-            console.error('Error in YouTube URL check:', err);
-          }
-        }, 500);
-
-        window.addEventListener('beforeunload', () => {
-          clearInterval(urlCheckInterval);
-        });
-      }
-      
-      // Special handling for Instagram Reels - detect URL changes
-      if (currentHost.includes('instagram.com')) {
-        // Check for URL changes periodically
-        const urlCheckInterval = setInterval(() => {
-          if (isBlocked) return;
-          
-          const currentUrl = window.location.href;
-          
-          // Check if this is an Instagram Reels page
-          const isReelsPage = currentUrl.includes('/reel/') || 
-                            currentUrl.includes('/reels/') ||
-                            document.querySelector('div[role="dialog"] video') !== null;
-          
-          // If URL changed and we're on a reels page, count it as a scroll
-          if (isReelsPage && currentUrl !== lastUrl) {
-            console.log('Instagram Reels navigation detected', { from: lastUrl, to: currentUrl });
-            incrementScrollCount();
-            lastUrl = currentUrl;
-          }
-        }, 500); // Check every 500ms
-
-        // Also track swipe navigation which might not change URL
-        const detectReelSwipes = () => {
-          const reelContainers = document.querySelectorAll('div[role="dialog"], div[data-visualcompletion="ignore-dynamic"]');
-          
-          reelContainers.forEach(container => {
-            // Use type assertion to bypass TypeScript check
-            const containerElement = container as HTMLElement & { _reelsObserved?: boolean };
-            
-            if (!containerElement._reelsObserved) {
-              containerElement._reelsObserved = true;
-              
-              // Set up mutation observer to detect new reels content
-              const reelsObserver = new MutationObserver((mutations) => {
-                // Check if we're potentially in a reel view
-                const isInReelView = document.querySelector('div[role="dialog"] video') !== null;
-                
-                if (isInReelView && !isBlocked) {
-                  // Look for key mutations that suggest navigation between reels
-                  const significantChange = mutations.some(mutation => {
-                    // Video source changed
-                    return mutation.type === 'attributes' && 
-                           mutation.target instanceof HTMLVideoElement ||
-                           // New video element
-                           mutation.addedNodes.length > 0 && 
-                           Array.from(mutation.addedNodes).some(node => 
-                             node instanceof HTMLElement && node.querySelector('video') !== null
-                           );
-                  });
-                  
-                  if (significantChange) {
-                    console.log('Instagram Reels swipe navigation detected');
-                    incrementScrollCount();
-                  }
-                }
-              });
-              
-              reelsObserver.observe(container, {
-                childList: true,
-                subtree: true,
-                attributes: true,
-                attributeFilter: ['src', 'style']
-              });
-              
-              // Clean up when page unloads
-              window.addEventListener('beforeunload', () => {
-                reelsObserver.disconnect();
-              });
-            }
-          });
-        };
-        
-        // Run initially
-        detectReelSwipes();
-        
-        // And check periodically for new reel containers
-        setInterval(detectReelSwipes, 2000);
-        
-        // Clean up interval when page unloads
-        window.addEventListener('beforeunload', () => {
-          clearInterval(urlCheckInterval);
-        });
-      }
-    }
-    
-    // Create and inject the stylesheet for hiding YouTube elements
-    function injectYoutubeStylesheet() {
-      // If not YouTube, don't do anything
-      if (!currentHost.includes('youtube.com')) return;
-
-      const styleId = 'nomoscroll-youtube-styles';
-      
-      // Return if style element already exists
-      if (document.getElementById(styleId)) return;
-      
-      // Create style element
+    // ---------- SIDEKICK CSS ----------
+    function applySidekickCSS() {
+      if (document.getElementById('moodscroll-sidekick-css')) return;
       const style = document.createElement('style');
-      style.id = styleId;
+      style.id = 'moodscroll-sidekick-css';
+      // PHONE-ONLY mode: hide every piece of TikTok's chrome — nav, header,
+      // engagement sidebar, captions, music label. Leave only the bare video.
       style.textContent = `
-        /* Hide Shorts section in sidebar (when setting enabled) */
-        ${youtubeSettings.hideShorts ? `
-          /* Sidebar "Shorts" link */
-          ytd-guide-section-renderer a[href="/shorts"],
-          ytd-guide-entry-renderer a[href="/shorts"],
-          ytd-mini-guide-entry-renderer a[href="/shorts"],
-          /* Shorts chips at top of home */
-          ytd-rich-shelf-renderer[is-shorts],
-          ytd-rich-grid-row:has([is-shorts]),
-          ytd-rich-section-renderer:has([is-shorts]),
-          ytd-reel-shelf-renderer,
-          ytd-rich-shelf-renderer:has(yt-formatted-string:contains("Shorts")),
-          ytd-rich-section-renderer:has(yt-formatted-string:contains("Shorts")),
-          /* Shorts carousel */
-          ytd-rich-grid-row:has(ytd-rich-item-renderer:has([href*="/shorts/"])),
-          ytd-grid-video-renderer:has(a[href*="/shorts/"]),
-          ytd-video-renderer:has(a[href*="/shorts/"]),
-          ytd-compact-video-renderer:has(a[href*="/shorts/"]),
-          ytd-compact-radio-renderer:has(a[href*="/shorts/"]),
-          /* Video grid items that are shorts */
-          ytd-rich-item-renderer:has(a[href*="/shorts/"]) {
-            display: none !important;
-          }
-        ` : ''}
+        /* HARD HIDES: all nav + header chrome */
+        [data-e2e="nav-foryou"], [data-e2e="nav-following"], [data-e2e="nav-explore"],
+        [data-e2e="nav-live"], [data-e2e="nav-shop"], [data-e2e="nav-profile"],
+        [data-e2e="nav-upload"], [data-e2e="nav-more-menu"], [data-e2e="nav-search"],
+        [data-e2e="search-box"], [data-e2e="search-box-button"],
+        [data-e2e="top-login-button"], [data-e2e="top-right-action-bar-get-coin"],
+        [data-e2e="tiktok-logo"],
+        /* Right-side engagement column (like/comment/share/follow/save) */
+        [data-e2e="like-icon"], [data-e2e="like-count"],
+        [data-e2e="comment-icon"], [data-e2e="comment-count"],
+        [data-e2e="share-icon"], [data-e2e="share-count"],
+        [data-e2e="favorite-icon"], [data-e2e="favorite-count"],
+        [data-e2e="feed-follow"], [data-e2e="video-author-avatar"],
+        [data-e2e="more-menu-icon"], [data-e2e="see-more-icon"],
+        /* Caption / music / desc overlays */
+        [data-e2e="video-desc"], [data-e2e="video-music"], [data-e2e="capcut-tag"],
+        [data-e2e^="desc-span"], [data-e2e="copyright"],
+        /* Sidebars + the whole left column */
+        [class*="DivSideNavContainer"], [class*="DivHeaderContainer"],
+        [class*="DivLeftContainer"], [class*="DivSidebarContainer"],
+        [class*="DivTabMenuContainer"], aside, header {
+          display: none !important; width: 0 !important; height: 0 !important;
+        }
+        /* Compress horizontal margins so video fills the window */
+        #column-list-container, [class*="DivColumnL"] {
+          margin: 0 auto !important; padding: 0 !important;
+        }
+        body, html {
+          background: #000 !important;
+        }
+        /* Strip TikTok's gradient overlays that darken the bottom of the video */
+        [class*="DivBottomShadow"], [class*="DivVideoInfoContainer"],
+        [class*="DivVideoCardContainer"] > div[class*="DivBottom"] {
+          display: none !important;
+        }
+        /* Mood Scroll's own collapsed button stays visible (z-index 2^31) */
       `;
-      
       document.head.appendChild(style);
-    }    // Function to handle YouTube home redirect
-    function handleYoutubeHomeRedirect() {
-      // Only proceed if we're on YouTube 
-      if (!currentHost.includes('youtube.com')) return;
-      
-      const path = window.location.pathname;
-      
-      // Handle home/explore page redirection - depends on hideHomeFeed setting
-      if (youtubeSettings.hideHomeFeed && (path === '/' || path === '/feed/explore')) {
-        // Redirect to subscriptions
-        window.location.href = 'https://www.youtube.com/feed/subscriptions';
-        return; // Return early to avoid shorts check if we're already redirecting
-      }
-      
-      // Handle shorts redirection - depends on hideShorts setting
-      if (youtubeSettings.hideShorts && (path === '/shorts/' || path.startsWith('/shorts'))) {
-        // Redirect to subscriptions
-        window.location.href = 'https://www.youtube.com/feed/subscriptions';
-      }
+    }
+    function removeSidekickCSS() {
+      document.getElementById('moodscroll-sidekick-css')?.remove();
     }
 
-    // Function to handle Instagram Reels redirect
-    function handleInstagramReelsRedirect() {
-      // Only proceed if we're on Instagram
-      if (!currentHost.includes('instagram.com')) return;
-      
-      const path = window.location.pathname;
-      
-      // Handle reels redirection - depends on hideReels setting
-      if (instagramSettings.hideReels && (path.includes('/reel/') || path === '/reels/' || path.startsWith('/reels'))) {
-        // Redirect to home feed
-        window.location.href = 'https://www.instagram.com/';
-      }
+    // ---------- OVERLAY UI (Shadow DOM) ----------
+    let overlayRoot: HTMLDivElement | null = null;
+    let shadow: ShadowRoot | null = null;
+
+    function ensureOverlay() {
+      if (overlayRoot && document.documentElement.contains(overlayRoot)) return;
+      overlayRoot = document.createElement('div');
+      overlayRoot.id = 'moodscroll-overlay-root';
+      // Host is non-interactive; only the toggle button + panel inside the shadow root receive clicks.
+      overlayRoot.style.cssText = 'all: initial; position: fixed; inset: 0; z-index: 2147483647; pointer-events: none;';
+      shadow = overlayRoot.attachShadow({ mode: 'open' });
+      shadow.innerHTML = overlayHTML();
+      // Attach to documentElement (not body) so we escape app-level stacking contexts.
+      document.documentElement.appendChild(overlayRoot);
+      wireOverlay();
+      updateOverlayState();
+      updateOverlayStats();
     }
 
-    // Set up observer to monitor YouTube DOM changes for persistent hiding
-    function setupYoutubeObserver() {
-      // Only run on YouTube
-      if (!currentHost.includes('youtube.com')) return;
-      
-      // Clean up any existing observer
-      if (window._youtubeSettingsObserver) {
-        window._youtubeSettingsObserver.disconnect();
-        window._youtubeSettingsObserver = null;
-      }
-      
-      // If neither setting is enabled, don't need an observer
-      if (!youtubeSettings.hideShorts) return;
-      
-      // Create a new observer to handle dynamically loaded content
-      const observer = new MutationObserver(() => {
-        // Re-inject the stylesheet to ensure newly loaded content is hidden
-        injectYoutubeStylesheet();
+    function overlayHTML(): string {
+      const modeButtons = MODES.map(m =>
+        `<button class="ms-mode" data-mode="${m.id}"><span class="ms-emoji">${m.emoji}</span><span class="ms-label">${m.label}</span></button>`
+      ).join('');
+      return `
+<style>
+  :host {
+    all: initial;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif;
+    --bg-base: rgba(22, 22, 24, 0.78);
+    --bg-elevated: rgba(255, 255, 255, 0.05);
+    --bg-elevated-hover: rgba(255, 255, 255, 0.09);
+    --border-subtle: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.16);
+    --text-primary: rgba(255, 255, 255, 0.95);
+    --text-secondary: rgba(255, 255, 255, 0.58);
+    --text-tertiary: rgba(255, 255, 255, 0.36);
+    --accent: #ffd75a;
+    --accent-rich: linear-gradient(180deg, #ffe07a 0%, #ffc83d 100%);
+    --success: #34d399;
+    --success-rich: linear-gradient(180deg, #4ade80 0%, #22c55e 100%);
+    --danger: #f87171;
+    --danger-rich: linear-gradient(180deg, #fb7185 0%, #e11d48 100%);
+    --purple: #a78bfa;
+    --purple-rich: linear-gradient(180deg, #c4b5fd 0%, #8b5cf6 100%);
+    --spring: cubic-bezier(0.32, 1.45, 0.6, 1);
+    --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  * { box-sizing: border-box; font-family: inherit; -webkit-font-smoothing: antialiased; }
+
+  /* ---------- FLOATING TOGGLE ---------- */
+  .ms-toggle {
+    position: fixed; bottom: 80px; right: 20px; width: 52px; height: 52px;
+    border-radius: 50%;
+    background: linear-gradient(180deg, rgba(50,50,55,0.85), rgba(22,22,24,0.85));
+    color: var(--text-primary);
+    border: 0.5px solid rgba(255,255,255,0.18);
+    cursor: pointer; font-size: 22px; line-height: 1;
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.12),
+      inset 0 -1px 0 rgba(0,0,0,0.3),
+      0 8px 24px rgba(0,0,0,0.5),
+      0 1px 2px rgba(0,0,0,0.3);
+    transition: transform 0.25s var(--spring), box-shadow 0.25s var(--ease), background 0.25s var(--ease);
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: auto;
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+  }
+  .ms-toggle:hover { transform: translateY(-2px) scale(1.05); box-shadow: inset 0 1px 0 rgba(255,255,255,0.15), inset 0 -1px 0 rgba(0,0,0,0.3), 0 12px 32px rgba(0,0,0,0.6); }
+  .ms-toggle:active { transform: scale(0.95); }
+  .ms-toggle.active {
+    background: var(--accent-rich);
+    color: #1a1500; border-color: rgba(255, 217, 90, 0.5);
+    box-shadow:
+      0 0 0 4px rgba(255, 217, 90, 0.12),
+      0 8px 32px rgba(255, 217, 90, 0.35),
+      inset 0 1px 0 rgba(255,255,255,0.4);
+  }
+  .ms-toggle .ms-pulse {
+    position: absolute; inset: -8px; border-radius: 50%;
+    border: 1.5px solid var(--accent); opacity: 0; pointer-events: none;
+    animation: msPulse 2.4s var(--ease) infinite;
+  }
+  .ms-toggle.active .ms-pulse { opacity: 1; }
+  @keyframes msPulse {
+    0% { transform: scale(0.85); opacity: 0.9; }
+    100% { transform: scale(1.6); opacity: 0; }
+  }
+
+  /* ---------- DECISION FLASH ---------- */
+  .ms-flash {
+    position: fixed; bottom: 148px; right: 20px;
+    padding: 9px 16px; border-radius: 100px;
+    font-size: 11.5px; font-weight: 600; letter-spacing: -0.01em;
+    pointer-events: none; opacity: 0;
+    transform: translateY(8px);
+    transition: all 0.4s var(--spring);
+    backdrop-filter: blur(20px) saturate(180%);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    border: 0.5px solid rgba(255,255,255,0.15);
+  }
+  .ms-flash.show { opacity: 1; transform: translateY(0); }
+  .ms-flash.match { background: var(--success-rich); color: #042818; }
+  .ms-flash.skip { background: var(--danger-rich); color: #ffffff; }
+
+  /* ---------- LOCKED-IN CELEBRATION BANNER ---------- */
+  .ms-locked-banner {
+    position: fixed; top: 50%; left: 50%;
+    transform: translate(-50%, -50%) scale(0.85);
+    background: linear-gradient(180deg, rgba(20, 50, 32, 0.95), rgba(15, 35, 22, 0.95));
+    color: #4ade80;
+    border: 1px solid rgba(74, 222, 128, 0.4);
+    border-radius: 20px; padding: 28px 40px;
+    box-shadow: 0 0 0 4px rgba(74, 222, 128, 0.12), 0 32px 80px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.08);
+    backdrop-filter: blur(28px) saturate(180%);
+    -webkit-backdrop-filter: blur(28px) saturate(180%);
+    pointer-events: none; opacity: 0;
+    z-index: 2147483647;
+    transition: opacity 0.5s var(--ease), transform 0.6s var(--spring);
+    text-align: center; min-width: 320px;
+  }
+  .ms-locked-banner.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  .ms-locked-icon { font-size: 56px; line-height: 1; margin-bottom: 10px; }
+  .ms-locked-title { font-size: 22px; font-weight: 700; letter-spacing: -0.02em;
+    background: linear-gradient(180deg, #fff, #4ade80); -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent; margin-bottom: 6px; }
+  .ms-locked-sub { font-size: 13px; color: rgba(255,255,255,0.65); letter-spacing: -0.005em; }
+
+  /* ---------- PANEL ---------- */
+  .ms-panel {
+    position: fixed; bottom: 148px; right: 20px; width: 304px;
+    background: var(--bg-base);
+    color: var(--text-primary);
+    border: 0.5px solid var(--border-subtle);
+    border-radius: 18px; padding: 16px 14px 14px;
+    box-shadow:
+      0 0 0 0.5px rgba(0,0,0,0.5),
+      0 40px 100px -10px rgba(0,0,0,0.75),
+      inset 0 0.5px 0 rgba(255,255,255,0.07);
+    backdrop-filter: blur(48px) saturate(200%);
+    -webkit-backdrop-filter: blur(48px) saturate(200%);
+    display: none; pointer-events: auto;
+    transform-origin: bottom right;
+    opacity: 0; transform: translateY(8px) scale(0.96);
+    transition: opacity 0.28s var(--ease), transform 0.32s var(--spring);
+  }
+  .ms-panel.open { display: block; opacity: 1; transform: translateY(0) scale(1); }
+
+  .ms-header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 2px;
+  }
+  .ms-title {
+    font-size: 15px; font-weight: 600; letter-spacing: -0.02em;
+    color: var(--text-primary);
+  }
+  .ms-close {
+    background: rgba(255,255,255,0.06);
+    color: var(--text-tertiary); border: none; cursor: pointer;
+    font-size: 13px; line-height: 1; padding: 0;
+    width: 22px; height: 22px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.18s var(--ease);
+  }
+  .ms-close:hover { background: rgba(255,255,255,0.14); color: var(--text-primary); }
+  .ms-subtitle {
+    font-size: 11px; color: var(--text-tertiary);
+    margin-bottom: 12px; letter-spacing: -0.005em;
+  }
+
+  /* ---------- MODE GRID ---------- */
+  .ms-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-bottom: 10px;
+  }
+  .ms-mode {
+    background: rgba(255,255,255,0.04);
+    color: var(--text-secondary);
+    border: 0.5px solid var(--border-subtle);
+    border-radius: 9px; padding: 9px 9px;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 7px;
+    font-size: 11.5px; font-weight: 500; letter-spacing: -0.005em;
+    transition: background 0.18s var(--ease), color 0.18s var(--ease), border-color 0.18s var(--ease), transform 0.16s var(--spring);
+  }
+  .ms-mode:hover { background: rgba(255,255,255,0.08); color: var(--text-primary); }
+  .ms-mode:active { transform: scale(0.97); }
+  .ms-mode.active {
+    background: linear-gradient(180deg, #ffe07a 0%, #ffc83d 100%);
+    color: #1a1500;
+    border-color: transparent;
+    box-shadow: 0 2px 10px rgba(255, 217, 90, 0.28), inset 0 1px 0 rgba(255,255,255,0.4);
+    font-weight: 600;
+  }
+  .ms-emoji { font-size: 15px; line-height: 1; flex-shrink: 0; }
+  .ms-label { font-size: 11.5px; }
+
+  /* ---------- CUSTOM INPUT ---------- */
+  .ms-custom-wrap { margin-bottom: 12px; display: none; }
+  .ms-custom-wrap.show { display: block; animation: msSlideDown 0.32s var(--spring); }
+  @keyframes msSlideDown { from { opacity: 0; transform: translateY(-6px); max-height: 0; } to { opacity: 1; transform: translateY(0); max-height: 80px; } }
+  .ms-custom-input {
+    width: 100%; padding: 11px 13px;
+    background: rgba(255,255,255,0.05); color: var(--text-primary);
+    border: 0.5px solid var(--border-subtle);
+    border-radius: 10px; font-size: 13px;
+    font-family: inherit; letter-spacing: -0.01em;
+    box-sizing: border-box;
+    transition: all 0.2s var(--ease);
+  }
+  .ms-custom-input::placeholder { color: var(--text-tertiary); }
+  .ms-custom-input:focus {
+    outline: none; border-color: var(--accent);
+    background: rgba(255,255,255,0.08);
+    box-shadow: 0 0 0 3px rgba(255, 217, 90, 0.1);
+  }
+  .ms-custom-hint {
+    font-size: 10.5px; color: var(--text-tertiary);
+    margin-top: 6px; padding-left: 2px; letter-spacing: -0.005em;
+  }
+
+  /* ---------- ACTIVE LINE ---------- */
+  .ms-active-line {
+    font-size: 11px; padding: 8px 11px;
+    background: rgba(52,211,153,0.07); color: var(--success);
+    border: 0.5px solid rgba(52,211,153,0.18);
+    border-radius: 9px; margin-bottom: 10px;
+    letter-spacing: -0.005em; display: none;
+  }
+  .ms-active-line.show { display: block; }
+  .ms-active-line b { color: white; font-weight: 600; }
+
+  /* ---------- PHASE INDICATOR ---------- */
+  .ms-phase {
+    background: rgba(255,255,255,0.04);
+    border: 0.5px solid var(--border-subtle);
+    border-radius: 12px; padding: 10px 12px; margin-bottom: 12px;
+    display: none;
+  }
+  .ms-phase.show { display: block; }
+  .ms-phase-row {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 11.5px; margin-bottom: 7px; letter-spacing: -0.01em;
+  }
+  .ms-phase-label {
+    color: var(--text-primary); font-weight: 500;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .ms-phase-label::before {
+    content: ''; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent); box-shadow: 0 0 8px var(--accent);
+    animation: msBlink 1.4s ease-in-out infinite;
+  }
+  .ms-phase.stable .ms-phase-label::before {
+    background: var(--success); box-shadow: 0 0 8px var(--success); animation: none;
+  }
+  @keyframes msBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .ms-phase-stat { color: var(--text-tertiary); font-variant-numeric: tabular-nums; font-size: 11px; }
+  .ms-phase-bar {
+    height: 4px; background: rgba(255,255,255,0.08); border-radius: 100px; overflow: hidden;
+  }
+  .ms-phase-fill {
+    height: 100%; width: 0%;
+    background: linear-gradient(90deg, var(--accent), var(--success));
+    border-radius: 100px;
+    transition: width 0.6s var(--ease);
+  }
+  .ms-phase.stable .ms-phase-fill { background: var(--success); }
+
+  /* ---------- STATS — minimal inline strip ---------- */
+  .ms-stats {
+    display: flex; justify-content: space-between;
+    padding: 7px 4px;
+    margin-bottom: 10px;
+    font-size: 10.5px; color: var(--text-tertiary);
+    letter-spacing: 0;
+    border-top: 0.5px solid var(--border-subtle);
+    border-bottom: 0.5px solid var(--border-subtle);
+  }
+  .ms-stat-cell {
+    display: flex; align-items: baseline; gap: 4px;
+  }
+  .ms-stat-cell b {
+    color: var(--text-primary); font-weight: 600; font-size: 12px;
+    font-variant-numeric: tabular-nums; letter-spacing: -0.015em;
+  }
+  .ms-stat-cell span { font-size: 10.5px; color: var(--text-tertiary); }
+
+  /* ---------- ENGAGE TOGGLE ROW ---------- */
+  .ms-toggle-row {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 11px; padding: 3px 2px; margin-bottom: 10px;
+    color: var(--text-secondary); letter-spacing: -0.005em;
+  }
+  .ms-switch { position: relative; display: inline-block; width: 30px; height: 18px; }
+  .ms-switch input { opacity: 0; width: 0; height: 0; }
+  .ms-slider {
+    position: absolute; cursor: pointer; inset: 0;
+    background: rgba(255,255,255,0.12);
+    border-radius: 18px; transition: background 0.22s var(--ease);
+  }
+  .ms-slider::before {
+    position: absolute; content: ""; height: 14px; width: 14px;
+    left: 2px; top: 2px; background: white;
+    border-radius: 50%; transition: transform 0.26s var(--spring);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.35);
+  }
+  input:checked + .ms-slider { background: var(--success); }
+  input:checked + .ms-slider::before { transform: translateX(12px); }
+
+  /* ---------- LAYOUT BUTTONS ---------- */
+  .ms-sidekick-row { display: grid; grid-template-columns: 1.6fr 1fr; gap: 5px; margin-bottom: 6px; }
+  .ms-sidekick-btn {
+    padding: 9px 6px;
+    background: rgba(255,255,255,0.04); color: var(--text-secondary);
+    border: 0.5px solid var(--border-subtle); border-radius: 8px;
+    cursor: pointer; font-family: inherit;
+    font-size: 11px; font-weight: 500; letter-spacing: -0.005em;
+    transition: background 0.18s var(--ease), color 0.18s var(--ease), border-color 0.18s var(--ease);
+  }
+  /* The primary Phone Mode button — slightly bigger, accent-colored */
+  .ms-phone-btn {
+    background: rgba(255, 217, 90, 0.08) !important;
+    color: var(--accent) !important;
+    border-color: rgba(255, 217, 90, 0.22) !important;
+    font-weight: 600 !important;
+  }
+  .ms-phone-btn:hover {
+    background: rgba(255, 217, 90, 0.14) !important;
+    border-color: rgba(255, 217, 90, 0.4) !important;
+  }
+  .ms-phone-btn.active {
+    background: linear-gradient(180deg, #ffe07a, #ffc83d) !important;
+    color: #1a1500 !important;
+    border-color: transparent !important;
+    box-shadow: 0 2px 10px rgba(255, 217, 90, 0.28), inset 0 1px 0 rgba(255,255,255,0.35);
+  }
+  .ms-sidekick-btn:hover {
+    background: rgba(167, 139, 250, 0.09); color: var(--purple);
+    border-color: rgba(167, 139, 250, 0.25);
+  }
+  .ms-sidekick-btn.active:not(.ms-phone-btn) {
+    background: linear-gradient(180deg, #c4b5fd, #8b5cf6); color: white;
+    border-color: transparent;
+    box-shadow: 0 2px 10px rgba(167, 139, 250, 0.28), inset 0 1px 0 rgba(255,255,255,0.22);
+  }
+
+  /* ---------- ACTIONS ---------- */
+  .ms-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+  .ms-stop, .ms-receipt-btn {
+    padding: 8px;
+    background: rgba(255,255,255,0.04); color: var(--text-secondary);
+    border: 0.5px solid var(--border-subtle); border-radius: 8px;
+    cursor: pointer; font-family: inherit;
+    font-size: 11px; font-weight: 500; letter-spacing: -0.005em;
+    transition: background 0.18s var(--ease), color 0.18s var(--ease), border-color 0.18s var(--ease);
+  }
+  .ms-receipt-btn:hover { background: rgba(255,255,255,0.08); color: var(--text-primary); }
+  .ms-stop:hover {
+    background: rgba(248,113,113,0.09); color: var(--danger);
+    border-color: rgba(248,113,113,0.25);
+  }
+</style>
+<button class="ms-toggle" id="ms-toggle" title="Mood Scroll — click to open"><span class="ms-pulse"></span><span id="ms-toggle-icon">✨</span></button>
+<div class="ms-flash" id="ms-flash"></div>
+<div class="ms-locked-banner" id="ms-locked-banner">
+  <div class="ms-locked-icon">🎯</div>
+  <div class="ms-locked-title">LOCKED IN</div>
+  <div class="ms-locked-sub">Algorithm tuned · scrolling at natural pace</div>
+</div>
+<div class="ms-panel" id="ms-panel">
+  <div class="ms-header">
+    <span class="ms-title">Mood Scroll</span>
+    <button class="ms-close" id="ms-close">×</button>
+  </div>
+  <div class="ms-subtitle">pick a mood — i'll filter the feed</div>
+  <div class="ms-grid">${modeButtons}</div>
+  <div class="ms-custom-wrap" id="ms-custom-wrap">
+    <input class="ms-custom-input" id="ms-custom-input" type="text" placeholder="describe what you want..." maxlength="200" />
+    <div class="ms-custom-hint">enter to activate · examples: "startup founders", "60s rock", "golden retrievers"</div>
+  </div>
+  <div class="ms-active-line" id="ms-active-line">Active: <b id="ms-active-text"></b></div>
+  <div class="ms-phase" id="ms-phase">
+    <div class="ms-phase-row">
+      <span class="ms-phase-label" id="ms-phase-label">Training the algo</span>
+      <span class="ms-phase-stat" id="ms-phase-stat">0/0 matched</span>
+    </div>
+    <div class="ms-phase-bar"><div class="ms-phase-fill" id="ms-phase-fill"></div></div>
+  </div>
+  <div class="ms-stats">
+    <div class="ms-stat-cell"><b id="ms-timer">0:00</b></div>
+    <div class="ms-stat-cell"><b id="ms-watched">0</b><span>watched</span></div>
+    <div class="ms-stat-cell"><b id="ms-skipped">0</b><span>skipped</span></div>
+  </div>
+  <div class="ms-toggle-row">
+    <span>train algo (auto-like matches)</span>
+    <label class="ms-switch">
+      <input type="checkbox" id="ms-engage-toggle" />
+      <span class="ms-slider"></span>
+    </label>
+  </div>
+  <div class="ms-sidekick-row">
+    <button class="ms-sidekick-btn ms-phone-btn" id="ms-sidekick-btn" title="One click: shrink Chrome to a phone-sized strip on the right edge of your screen, hide all of TikTok's nav/buttons/captions so only the video shows, and auto-start scrolling. Work on the rest of your screen while TikTok plays.">📱 Phone Mode</button>
+    <button class="ms-sidekick-btn" id="ms-popout-btn" title="Open TikTok in a NEW narrow window instead of resizing this one. Use if you want your current tabs to stay full-size.">🪟 New Window</button>
+  </div>
+  <div class="ms-actions">
+    <button class="ms-receipt-btn" id="ms-receipt-btn">📊 Receipt</button>
+    <button class="ms-stop" id="ms-stop">⏹ Stop</button>
+  </div>
+</div>
+      `;
+    }
+
+    function wireOverlay() {
+      if (!shadow) return;
+      const toggle = shadow.getElementById('ms-toggle')!;
+      const panel = shadow.getElementById('ms-panel')!;
+      const closeBtn = shadow.getElementById('ms-close')!;
+      const customWrap = shadow.getElementById('ms-custom-wrap')!;
+      const customInput = shadow.getElementById('ms-custom-input') as HTMLInputElement;
+      const engageToggle = shadow.getElementById('ms-engage-toggle') as HTMLInputElement;
+      const stopBtn = shadow.getElementById('ms-stop')!;
+      const receiptBtn = shadow.getElementById('ms-receipt-btn')!;
+
+      toggle.addEventListener('click', () => {
+        panel.classList.toggle('open');
       });
-      
-      // Start observing
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true
-      });
-      
-      // Store the observer for cleanup
-      window._youtubeSettingsObserver = observer;
-    }
-    
-    // Timer update interval reference
-    let timerUpdateInterval: ReturnType<typeof globalThis.setInterval> | null = null;
-    
-    function startTimerUpdates() {
-      if (resetInterval > 0 && !timerUpdateInterval) {
-        timerUpdateInterval = setInterval(() => {
-          updateCounter();
-          checkTimeBasedReset();
-        }, 1000);
-      }
-    }
-    
-    function stopTimerUpdates() {
-      if (timerUpdateInterval) {
-        clearInterval(timerUpdateInterval);
-        timerUpdateInterval = null;
-      }
-    }
+      closeBtn.addEventListener('click', () => panel.classList.remove('open'));
 
-    // Check if current site is in the distracting sites list
-    function isDistractingSite() {
-      return distractingSites.some(site => currentHost.includes(site));
-    }
-    
-    // Find the specific domain from the distracting sites list that matches current host
-    function getMatchingDomain() {
-      return distractingSites.find(site => currentHost.includes(site)) || currentHost;
-    }
-    
-    // Get effective scroll limit for current domain
-    function getEffectiveScrollLimit() {
-      const domain = getMatchingDomain();
-      const baseLimit = customLimits[domain] || maxScrolls;
-      const bonusScrolls = temporaryBonusScrolls[domain] || 0;
-      return baseLimit + bonusScrolls;
-    }
-    
-    // Block/unblock scrolling
-    function setScrollBlocking(block: boolean) {
-      isBlocked = block;
-      
-      if (block) {
-        // Save current scroll position
-        document.body.setAttribute('data-scroll-position', window.scrollY.toString());
-        
-        // Add event listeners to prevent scrolling
-        window.addEventListener('wheel', preventWheelScroll, { passive: false });
-        window.addEventListener('touchmove', preventWheelScroll, { passive: false });
-        window.addEventListener('keydown', preventKeyScroll);
-        
-        // Fix body
-        const scrollY = window.scrollY;
-        document.body.style.position = 'fixed';
-        document.body.style.top = `-${scrollY}px`;
-        document.body.style.width = '100%';
-        document.body.style.overflow = 'hidden';
-        
-        // Show overlay
-        overlay.style.display = 'flex';
-      } else {
-        // Remove event listeners
-        window.removeEventListener('wheel', preventWheelScroll);
-        window.removeEventListener('touchmove', preventWheelScroll);
-        window.removeEventListener('keydown', preventKeyScroll);
-        
-        // Restore body
-        const scrollY = parseInt(document.body.getAttribute('data-scroll-position') || '0', 10);
-        document.body.style.position = '';
-        document.body.style.top = '';
-        document.body.style.width = '';
-        document.body.style.overflow = '';
-        window.scrollTo(0, scrollY);
-        
-        // Hide overlay
-        overlay.style.display = 'none';
-      }
-      
-      // Note: We've removed the startTimerUpdates and stopTimerUpdates calls from here
-      // since we now manage the timer independently of blocking status
-    }
-    
-    // Event handlers for blocking scroll
-    function preventWheelScroll(e: Event) {
-      if (isBlocked) {
-        e.preventDefault();
-        e.stopPropagation();
-        return false;
-      }
-    }
-    
-    function preventKeyScroll(e: KeyboardEvent) {
-      // Space, Page Up/Down, End, Home, Up, Down
-      const keys = [32, 33, 34, 35, 36, 38, 40];
-      if (isBlocked && keys.includes(e.keyCode)) {
-        e.preventDefault();
-        return false;
-      }
-    }
-    
-    // Make sure to clean up when unloading
-    window.addEventListener('beforeunload', () => {
-      console.log('CLEANUP: Page unloading, cleaning up resources');
-      
-      stopTimerUpdates();
-      stopLocalPomodoroUpdate();
-      
-      // Clean up AI analysis state
-      if (isAnalysisInProgress) {
-        console.log('CLEANUP: Analysis was in progress, clearing lock');
-        isAnalysisInProgress = false;
-      }
-      
-      // Clean up scraper resources
-      if (contentScraper) {
-        try {
-          contentScraper.destroy();
-          console.log('CLEANUP: Content scraper destroyed');
-        } catch (error) {
-          console.error('CLEANUP: Error destroying content scraper:', error);
-        }
-      }
-      
-      // Clean up YouTube observer
-      if (window._youtubeSettingsObserver) {
-        window._youtubeSettingsObserver.disconnect();
-        window._youtubeSettingsObserver = null;
-      }
-      
-      // Clean up video overlay manager
-      if (videoOverlayManager) {
-        try {
-          videoOverlayManager.destroy();
-          console.log('CLEANUP: Video overlay manager destroyed');
-        } catch (error) {
-          console.error('CLEANUP: Error destroying video overlay manager:', error);
-        }
-      }
-    });
-    
-    // Handle tab visibility changes
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) {
-        console.log('TAB: Tab became hidden');
-        // Don't reset analysis state, but stop active processes
-        if (isAnalysisInProgress) {
-          console.log('TAB: Analysis in progress while tab hidden, will continue');
-        }
-      } else {
-        console.log('TAB: Tab became visible');
-        // Content capture will resume automatically when scrolling in final phase
-      }
-    });
-
-    // Set up fullscreen change detection
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
-    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
-    document.addEventListener('MSFullscreenChange', handleFullscreenChange);
-    
-    function handleFullscreenChange() {
-      // Use standard property with fallbacks for older browsers
-      const isFullScreen = 
-        document.fullscreenElement || 
-        // Using type assertions to avoid TypeScript errors for non-standard properties
-        (document as any).webkitFullscreenElement || 
-        (document as any).mozFullScreenElement || 
-        (document as any).msFullscreenElement;
-      
-      if (isFullScreen) {
-        // Hide counter when in fullscreen
-        counter.style.display = 'none';
-      } else if (isDistractingSite()) {
-        // Show counter again when exiting fullscreen (only if still on a distracting site)
-        counter.style.display = 'block';
-      }
-    }
-
-    // Add this function to synchronize scroll count with storage
-    function syncScrollCount() {
-      const domain = getMatchingDomain();
-      
-      browser.storage.sync.get(['scrollCounts']).then(result => {
-        const scrollCounts = result.scrollCounts || {};
-        const storedCount = scrollCounts[domain] || 0;
-        
-        // If there's a discrepancy, use the stored value
-        if (scrollCount !== storedCount) {
-          console.log(`Scroll count sync: local=${scrollCount}, stored=${storedCount}`);
-          scrollCount = storedCount;
-          updateCounter();
-          
-          // Check if we should block based on current count
-          const effectiveMax = getEffectiveScrollLimit();
-          if (scrollCount >= effectiveMax) {
-            setScrollBlocking(true);
+      shadow.querySelectorAll('.ms-mode').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const modeId = (btn as HTMLElement).dataset.mode as ModeId;
+          if (modeId === 'custom') {
+            customWrap.classList.add('show');
+            customInput.value = customDescription;
+            customInput.focus();
+            if (customDescription) activateMode('custom');
+            else updateOverlayState();
+          } else {
+            customWrap.classList.remove('show');
+            activateMode(modeId);
           }
-        }
-      }).catch(err => {
-        console.error('Error syncing scroll count:', err);
+        });
       });
-    }
-    
-    // Start local pomodoro countdown
-    function startLocalPomodoroUpdate() {
-      // Clear any existing interval first
-      if (pomodoroUpdateInterval) {
-        clearInterval(pomodoroUpdateInterval);
-        pomodoroUpdateInterval = null;
+
+      customInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          const value = customInput.value.trim();
+          if (!value) return;
+          customDescription = value;
+          chrome.storage.local.set({ customDescription: value });
+          activateMode('custom');
+        }
+      });
+
+      customInput.addEventListener('blur', () => {
+        const value = customInput.value.trim();
+        if (value && value !== customDescription) {
+          customDescription = value;
+          chrome.storage.local.set({ customDescription: value });
+          if (currentMode === 'custom') updateOverlayState();
+        }
+      });
+
+      engageToggle.checked = autoEngage;
+      engageToggle.addEventListener('change', () => {
+        autoEngage = engageToggle.checked;
+        chrome.storage.local.set({ autoEngage });
+      });
+
+      stopBtn.addEventListener('click', () => {
+        currentMode = null;
+        chrome.storage.local.set({ currentMode: null });
+        updateOverlayState();
+      });
+
+      receiptBtn.addEventListener('click', () => {
+        chrome.runtime.sendMessage({ type: 'open_receipt' }).catch(() => {});
+      });
+
+      const sidekickBtn = shadow.getElementById('ms-sidekick-btn') as HTMLButtonElement;
+      if (sidekickBtn) {
+        sidekickBtn.addEventListener('click', async () => {
+          const screenW = window.screen.availWidth;
+          const screenH = window.screen.availHeight;
+          if (sidekickActive) {
+            await chrome.runtime.sendMessage({ type: 'sidekick_off', screenW, screenH }).catch(() => {});
+            sidekickActive = false;
+            removeSidekickCSS();
+            chrome.storage.local.set({ sidekickActive: false });
+          } else {
+            await chrome.runtime.sendMessage({ type: 'sidekick_on', screenW, screenH }).catch(() => {});
+            sidekickActive = true;
+            applySidekickCSS();
+            chrome.storage.local.set({ sidekickActive: true });
+            // If no mode is active, default to Auto Scroll so the user gets
+            // immediate hands-off playback in the new narrow window.
+            if (!currentMode) {
+              activateMode('auto_scroll');
+            }
+            panel.classList.remove('open');
+          }
+          updateOverlayState();
+        });
       }
-      
-      // Only start if pomodoro is active and we have a valid end time
-      if (!isPomodoroActive || pomodoroEndTime <= 0) return;
-      
-      // Set up an interval to update every second
-      pomodoroUpdateInterval = setInterval(() => {
-        const now = Date.now();
-        const remainingTime = Math.max(0, pomodoroEndTime - now);
-        
-        if (remainingTime <= 0) {
-          // Timer has finished, stop the interval
-          clearInterval(pomodoroUpdateInterval!);
-          pomodoroUpdateInterval = null;
-          
-          // We'll let the POMODORO_COMPLETE message handle the cleanup
+
+      const popoutBtn = shadow.getElementById('ms-popout-btn') as HTMLButtonElement;
+      if (popoutBtn) {
+        popoutBtn.addEventListener('click', async () => {
+          // Don't write sidekickActive to global storage — that would leak to the
+          // current tab on next reload. New popup window will be 440px wide so
+          // TikTok's responsive layout already collapses the left nav; user can
+          // click Compact inside the popup if they want full hide.
+          await chrome.runtime.sendMessage({
+            type: 'pop_out_side',
+            screenW: window.screen.availWidth,
+            screenH: window.screen.availHeight
+          }).catch(() => {});
+          panel.classList.remove('open');
+        });
+      }
+    }
+
+    function activateMode(modeId: ModeId) {
+      currentMode = modeId;
+      chrome.storage.local.set({ currentMode: modeId });
+      lastClassifiedVideoSrc = null;
+      resetPhase();
+      updateOverlayState();
+    }
+
+    function updateOverlayState() {
+      if (!shadow) return;
+      const toggle = shadow.getElementById('ms-toggle');
+      const toggleIcon = shadow.getElementById('ms-toggle-icon');
+      const activeLine = shadow.getElementById('ms-active-line');
+      const activeText = shadow.getElementById('ms-active-text');
+      const customWrap = shadow.getElementById('ms-custom-wrap');
+      const sidekickBtn = shadow.getElementById('ms-sidekick-btn');
+      if (!toggle || !toggleIcon || !activeLine || !activeText || !customWrap) return;
+
+      shadow.querySelectorAll('.ms-mode').forEach(b => {
+        const id = (b as HTMLElement).dataset.mode;
+        b.classList.toggle('active', id === currentMode);
+      });
+
+      if (currentMode) {
+        const mode = MODES.find(m => m.id === currentMode);
+        toggle.classList.add('active');
+        toggleIcon.textContent = mode?.emoji || '✨';
+        activeLine.classList.add('show');
+        if (currentMode === 'custom') {
+          activeText.textContent = `Custom — "${customDescription || '(empty)'}"`;
+          customWrap.classList.add('show');
+        } else if (currentMode === 'auto_scroll') {
+          activeText.textContent = 'Auto Scroll · every 5s';
+        } else {
+          activeText.textContent = mode?.label || currentMode;
+        }
+      } else {
+        toggle.classList.remove('active');
+        toggleIcon.textContent = '✨';
+        activeLine.classList.remove('show');
+      }
+      if (sidekickBtn) {
+        sidekickBtn.classList.toggle('active', sidekickActive);
+        sidekickBtn.textContent = sidekickActive ? '✕ Exit Phone Mode' : '📱 Phone Mode';
+      }
+    }
+
+    function flashDecision(matched: boolean, category: string) {
+      lastDecision = { matched, category, at: Date.now() };
+      if (!shadow) return;
+      const flash = shadow.getElementById('ms-flash');
+      if (!flash) return;
+      if (currentMode === 'auto_scroll') {
+        flash.textContent = `⏩ ${category}`;
+        flash.className = 'ms-flash show match';
+      } else {
+        flash.textContent = matched ? `MATCH · ${category}` : `SKIP · ${category}`;
+        flash.className = 'ms-flash show ' + (matched ? 'match' : 'skip');
+      }
+      setTimeout(() => flash.classList.remove('show'), 1800);
+    }
+
+    function recordDecision(matched: boolean) {
+      recentMatches.push(matched);
+      if (recentMatches.length > MATCH_WINDOW) recentMatches.shift();
+      const matchedCount = recentMatches.filter(Boolean).length;
+      const rate = recentMatches.length ? matchedCount / recentMatches.length : 0;
+      let newPhase: Phase = phase;
+      if (phase === 'training' && recentMatches.length >= 5 && rate >= STABLE_ENTER_THRESHOLD) {
+        newPhase = 'stable';
+      } else if (phase === 'stable' && rate < STABLE_EXIT_THRESHOLD) {
+        newPhase = 'training';
+      }
+      if (newPhase !== phase) {
+        const old = phase;
+        phase = newPhase;
+        console.log('[MoodScroll] phase →', phase, `(${matchedCount}/${recentMatches.length})`);
+        // Celebrate the lock-in!
+        if (old === 'training' && newPhase === 'stable') {
+          showLockedBanner();
+        }
+      }
+      updatePhaseUI();
+    }
+
+    function showLockedBanner() {
+      if (!shadow) return;
+      const banner = shadow.getElementById('ms-locked-banner');
+      if (!banner) return;
+      const mode = MODES.find(m => m.id === currentMode);
+      const label = currentMode === 'custom'
+        ? `"${customDescription || 'Custom'}"`
+        : (mode?.label || currentMode || '').toUpperCase();
+      banner.querySelector('.ms-locked-title')!.textContent = `${label} LOCKED IN`;
+      banner.classList.add('show');
+      setTimeout(() => banner.classList.remove('show'), 4000);
+    }
+
+    function updatePhaseUI() {
+      if (!shadow) return;
+      const ph = shadow.getElementById('ms-phase');
+      const label = shadow.getElementById('ms-phase-label');
+      const stat = shadow.getElementById('ms-phase-stat');
+      const fill = shadow.getElementById('ms-phase-fill') as HTMLElement;
+      if (!ph || !label || !stat || !fill) return;
+      // Auto-scroll has no training/stable phase
+      if (!currentMode || currentMode === 'auto_scroll') { ph.classList.remove('show'); return; }
+      ph.classList.add('show');
+      const matchedCount = recentMatches.filter(Boolean).length;
+      const pct = recentMatches.length ? Math.round((matchedCount / recentMatches.length) * 100) : 0;
+      if (phase === 'training') {
+        ph.classList.remove('stable');
+        label.textContent = 'Training the algo';
+        stat.textContent = `${matchedCount}/${recentMatches.length || 0} matched`;
+      } else {
+        ph.classList.add('stable');
+        label.textContent = `Tuned · ${pct}% on-target`;
+        stat.textContent = 'auto pace';
+      }
+      fill.style.width = `${pct}%`;
+    }
+
+    function resetPhase() {
+      phase = 'training';
+      recentMatches.length = 0;
+      updatePhaseUI();
+    }
+
+    async function updateOverlayStats() {
+      if (!shadow) return;
+      try {
+        const { session } = await chrome.storage.local.get('session');
+        const watched = session?.watched || 0;
+        const skipped = session?.skipped || 0;
+        const startedAt = session?.startedAt || Date.now();
+        const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+        const m = Math.floor(elapsed / 60);
+        const s = elapsed % 60;
+        const watchedEl = shadow.getElementById('ms-watched');
+        const skippedEl = shadow.getElementById('ms-skipped');
+        const timerEl = shadow.getElementById('ms-timer');
+        if (watchedEl) watchedEl.textContent = String(watched);
+        if (skippedEl) skippedEl.textContent = String(skipped);
+        if (timerEl) timerEl.textContent = `${m}:${String(s).padStart(2, '0')}`;
+      } catch {}
+    }
+
+    // Watch for DOM changes so the overlay survives TikTok SPA navigations
+    let observerDebounce: number | null = null;
+    const overlayObserver = new MutationObserver(() => {
+      if (observerDebounce) return;
+      observerDebounce = window.setTimeout(() => {
+        observerDebounce = null;
+        if (!overlayRoot || !document.documentElement.contains(overlayRoot)) ensureOverlay();
+      }, 250);
+    });
+    if (document.documentElement) {
+      ensureOverlay();
+      overlayObserver.observe(document.documentElement, { childList: true });
+    }
+    document.addEventListener('DOMContentLoaded', () => ensureOverlay(), { once: true });
+
+    setInterval(updateOverlayStats, 1000);
+
+    // ---------- AUTO-ADVANCE TICK (for matched videos in mode-filter scrolling) ----------
+    // After a match is classified, autoAdvanceAt is set to (now + WATCH_DURATIONS[category]).
+    // This tick checks if the hold has expired and advances. Skipped from auto_scroll mode
+    // because the auto-scroll loop manages its own advance.
+    setInterval(() => {
+      if (!currentMode || currentMode === 'auto_scroll' || autoAdvanceAt === 0) return;
+      if (Date.now() < autoAdvanceAt) return;
+      const video = findPlayingVideo();
+      if (!video) { autoAdvanceAt = 0; return; }
+      autoAdvanceAt = 0;
+      skipToNext(video.currentSrc);
+    }, 500);
+
+    // ---------- AUTO SCROLL LOOP (adaptive: classify category, hold for category-duration) ----------
+    let autoScrollClassifying = false;
+    let autoScrollSrc: string | null = null;
+    setInterval(async () => {
+      if (currentMode !== 'auto_scroll') { autoScrollSrc = null; return; }
+      if (autoScrollClassifying) return;
+      const video = findPlayingVideo();
+      if (!video) return;
+      const src = video.currentSrc;
+
+      // If we haven't classified this video yet, kick off a quick single-frame classify
+      if (autoScrollSrc !== src) {
+        autoScrollSrc = src;
+        autoScrollClassifying = true;
+        try {
+          const card = video.closest(CONFIG.itemSelector) as HTMLElement | null;
+          const scope: ParentNode = card || document;
+          const caption = scope.querySelector(CONFIG.captionSelector)?.textContent?.trim() || '';
+          // Auto-skip sponsored ads even in auto-scroll mode
+          if (isSponsoredCard(card, caption)) {
+            flashDecision(false, 'sponsored ad');
+            chrome.runtime.sendMessage({ type: 'tally', category: 'other', matched: false }).catch(() => {});
+            skipToNext(src);
+            autoScrollClassifying = false;
+            autoScrollSrc = null;
+            return;
+          }
+          const hashtags = Array.from(caption.matchAll(/#([\w]+)/g)).map(m => m[1]);
+          const sound = scope.querySelector(CONFIG.audioSelector)?.textContent?.trim() || '';
+          const creatorEl = scope.querySelector(CONFIG.creatorSelector);
+          const creator = (creatorEl?.getAttribute('href') || '').replace(/^\/@/, '@').split('?')[0] || 'unknown';
+          // single-frame classify — text + 1 visual frame, ~700ms total
+          const singleFrame = await captureSingleFrame(video);
+          const result = await chrome.runtime.sendMessage({
+            type: 'classify',
+            frames: singleFrame ? [singleFrame] : [],
+            caption, hashtags, sound, creator,
+            mode: 'other' // generic categorization, not filtering
+          }).catch(() => null);
+          const category = result?.category || 'other';
+          const dur = holdForVideo(category, video);
+          autoAdvanceAt = Date.now() + dur;
+          flashDecision(true, `${category} · ${Math.round(dur/1000)}s`);
+          chrome.runtime.sendMessage({ type: 'tally', category, matched: true }).catch(() => {});
+          if (autoEngage) maybeAutoLike(src, true);
+          console.log(`[MoodScroll] auto-scroll: ${category}, holding ${dur}ms`);
+        } catch (err) {
+          // On any error fall back to a 5s hold
+          autoAdvanceAt = Date.now() + 5000;
+        } finally {
+          autoScrollClassifying = false;
+        }
+        return;
+      }
+
+      // We've classified the current video — advance when its hold expires
+      if (Date.now() >= autoAdvanceAt) {
+        skipToNext(src);
+        autoScrollSrc = null;
+      }
+    }, 500);
+
+    // ---------- CLASSIFY + SKIP LOOP ----------
+    setInterval(async () => {
+      try {
+        if (!currentMode || isClassifying) return;
+        if (currentMode === 'auto_scroll') return; // handled by auto-scroll loop above
+        if (currentMode === 'custom' && !customDescription) return;
+        if (Date.now() - lastDecisionAt < tuning().decisionIntervalMs) return;
+
+        const video = findPlayingVideo();
+        if (!video) return;
+        if (video.currentSrc === lastClassifiedVideoSrc) return;
+
+        isClassifying = true;
+        const videoSrcAtStart = video.currentSrc;
+        const modeAtStart = currentMode;
+
+        // Scope DOM queries to the card containing the playing video so we don't
+        // pick metadata from a preloaded neighbor.
+        const card = video.closest(CONFIG.itemSelector) as HTMLElement | null;
+        const scope: ParentNode = card || document;
+        const caption = scope.querySelector(CONFIG.captionSelector)?.textContent?.trim() || '';
+        const hashtags = Array.from(caption.matchAll(/#([\w]+)/g)).map(m => m[1]);
+        const sound = scope.querySelector(CONFIG.audioSelector)?.textContent?.trim() || '';
+        const creatorEl = scope.querySelector(CONFIG.creatorSelector);
+        const creatorHref = creatorEl?.getAttribute('href') || '';
+        const creator = creatorHref.replace(/^\/@/, '@').split('?')[0] || 'unknown';
+
+        // Defensive: if the card hasn't loaded its metadata yet (TikTok mounts the
+        // <video> before populating caption/creator), skip this tick and retry next.
+        if (currentMode !== 'custom' && !caption && creator === 'unknown') {
+          isClassifying = false;
           return;
         }
-        
-        // Calculate minutes and seconds
-        const minutes = Math.floor(remainingTime / (60 * 1000));
-        const seconds = Math.floor((remainingTime % (60 * 1000)) / 1000);
-        
-        // Check with background script to determine if this is a break timer
-        browser.runtime.sendMessage({ type: 'GET_POMODORO_STATUS' })
-          .then(status => {
-            if (status && status.isActive) {
-              // Update the display with correct break status
-              updatePomodoroDisplay(minutes, seconds, pomodoroDuration, status.isBreak);
+
+        // SPONSORED AD SKIP — applies to EVERY mode including auto_scroll. We
+        // never want to count ads in the user's session.
+        if (isSponsoredCard(card, caption)) {
+          chrome.runtime.sendMessage({ type: 'tally', category: 'other', matched: false }).catch(() => {});
+          lastClassifiedVideoSrc = videoSrcAtStart;
+          lastDecisionAt = Date.now();
+          isClassifying = false;
+          flashDecision(false, '📣 sponsored ad');
+          console.log('[MoodScroll] SKIP sponsored ad');
+          skipToNext(videoSrcAtStart);
+          return;
+        }
+
+        // FAST PRE-SKIP: if this caption has hashtags from the mode's negative
+        // list, skip immediately without any API call. Catches the obvious 60%.
+        // SKIPPED for ALWAYS_VISION_MODES (LARP/Baddies/Fitness) where the
+        // visual frame is the decisive signal, not the caption.
+        const negTags = ALWAYS_VISION_MODES.has(currentMode || '')
+          ? []
+          : (NEGATIVE_HASHTAGS[currentMode || ''] || []);
+        const lowerHashtags = hashtags.map(h => h.toLowerCase());
+        if (negTags.length && negTags.some(tag => lowerHashtags.includes(tag.toLowerCase()))) {
+          const matchedTag = negTags.find(tag => lowerHashtags.includes(tag.toLowerCase()));
+          chrome.runtime.sendMessage({ type: 'tally', category: 'other', matched: false }).catch(() => {});
+          lastClassifiedVideoSrc = videoSrcAtStart;
+          lastDecisionAt = Date.now();
+          isClassifying = false;
+          flashDecision(false, `pre-skip #${matchedTag}`);
+          recordDecision(false);
+          console.log('[MoodScroll] INSTANT SKIP via negative hashtag', `#${matchedTag}`, 'for', currentMode);
+          skipToNext(videoSrcAtStart);
+          return;
+        }
+
+        // Tier 3 (creator memo) was causing false positives — if a creator made
+        // ANY 2 cooking videos, all their later videos got marked cooking without
+        // verification. DISABLED. Every video gets fresh classification.
+        let decision: { category: string; matches_mode?: boolean; confidence: number; reason?: string } | null = null;
+
+        if (false) {
+          // memo disabled — kept code structure intact
+        } else {
+          // Tier 1 (keyword) — ONLY use it to short-circuit when it's a
+          // confident NON-MATCH for the current mode. Confident positive
+          // classifications must still go through the API+vision verification
+          // because keyword overlap is too noisy (e.g., "how to make money"
+          // matches the cooking keyword "how to make" and would falsely match
+          // Cooking mode). Also SKIPPED for ALWAYS_VISION_MODES.
+          if (currentMode !== 'custom' && !ALWAYS_VISION_MODES.has(currentMode || '')) {
+            const t1 = tier1Classify(caption, hashtags, sound);
+            if (t1.confidence >= 0.8 && t1.category) {
+              const modeForT1 = MODES.find(m => m.id === currentMode);
+              const modeMatchesForT1: readonly string[] = (modeForT1?.matches as readonly string[]) ?? [];
+              if (!modeMatchesForT1.includes(t1.category)) {
+                // Confident non-match → safe to short-circuit, instant skip
+                decision = { category: t1.category, confidence: t1.confidence };
+                console.log(`[MoodScroll] Tier1 confident SKIP: ${t1.category} ∉ [${modeMatchesForT1.join(',')}]`);
+              }
+              // Confident "match" via keywords → fall through to API verification
             }
-          })
-          .catch(() => {
-            // Fallback if there's an error getting the status
-            updatePomodoroDisplay(minutes, seconds, pomodoroDuration, false);
-          });
-      }, 1000);
+          }
+
+          if (!decision) {
+            // Tier 2 (Claude/GPT). Always send AT LEAST ONE frame so the model
+            // can visually verify the text-based hint. During TRAINING we send
+            // 1 quick-capture frame (~5ms + ~700ms API). In STABLE we send 3
+            // frames over 1.2s for full accuracy.
+            const useMultipleFrames = tuning().useFrames || currentMode === 'custom';
+            let frames: string[] = [];
+            if (useMultipleFrames) {
+              frames = await captureFramesOverTime(video);
+            } else {
+              const single = await captureSingleFrame(video);
+              if (single) frames = [single];
+            }
+            const result = await chrome.runtime.sendMessage({
+              type: 'classify',
+              frames, caption, hashtags, sound, creator,
+              mode: currentMode,
+              customDescription: currentMode === 'custom' ? customDescription : undefined
+            });
+
+            const videoNow = findPlayingVideo();
+            if (!videoNow || videoNow.currentSrc !== videoSrcAtStart) {
+              isClassifying = false;
+              return;
+            }
+            if (result?.error) {
+              console.warn('[MoodScroll] Gemini error:', result.error);
+              isClassifying = false;
+              return;
+            }
+            decision = result;
+            // Confidence guard: if the model wasn't sure, treat as non-match.
+            // LARP / Baddies / Brain Rot all use 0.3 — these visual modes need
+            // generous matching because the model hedges confidence on visual
+            // judgments even when classifying correctly. Fitness uses 0.4.
+            // Other modes use 0.6.
+            const veryGenerousModes = new Set(['larp', 'baddies', 'brain_rot']);
+            const confThreshold = veryGenerousModes.has(currentMode || '')
+              ? 0.3
+              : (ALWAYS_VISION_MODES.has(currentMode || '') ? 0.4 : 0.6);
+            if (decision && typeof decision.confidence === 'number' && decision.confidence < confThreshold) {
+              console.log(`[MoodScroll] Low confidence (${decision.confidence} < ${confThreshold}) → demoting to 'other'`);
+              decision = { ...decision, category: 'other' };
+            }
+            // Don't update memo — disabled for accuracy.
+          }
+        }
+
+        if (!decision) {
+          isClassifying = false;
+          return;
+        }
+
+        const mode = MODES.find(m => m.id === currentMode);
+        const modeMatches: readonly string[] = mode?.matches ?? [];
+        // For FIXED modes, trust the locally-defined category mapping — NEVER
+        // trust the API's matches_mode field, which has been observed to be
+        // wrong (returning matches_mode=true while category clearly doesn't
+        // match the user's mode). For CUSTOM mode we have no fixed mapping,
+        // so the API's matches_mode (which compares against CUSTOM_DESCRIPTION)
+        // is the only signal we have.
+        const matches_mode = currentMode === 'custom'
+          ? (typeof decision.matches_mode === 'boolean' ? decision.matches_mode : false)
+          : modeMatches.includes(decision.category);
+
+        chrome.runtime.sendMessage({
+          type: 'tally',
+          category: decision.category,
+          matched: matches_mode
+        }).catch(() => {});
+
+        lastClassifiedVideoSrc = videoSrcAtStart;
+        lastDecisionAt = Date.now();
+        isClassifying = false;
+
+        const stillPlaying = findPlayingVideo();
+        if (!stillPlaying || stillPlaying.currentSrc !== videoSrcAtStart) {
+          console.log('[MoodScroll] video advanced before decision applied, dropping');
+          return;
+        }
+
+        flashDecision(matches_mode, decision.category);
+        recordDecision(matches_mode);
+        if (!matches_mode) {
+          // NON-MATCH: skip immediately. Fast scrolling on irrelevant content
+          // signals TikTok we don't want this.
+          console.log('[MoodScroll] SKIP:', decision.category, '|', decision.reason || '');
+          skipToNext(videoSrcAtStart);
+        } else {
+          // MATCH: hold for the category-appropriate watch time so TikTok gets
+          // a strong watch-time signal (the #1 ranking factor) AND auto-like so
+          // it also gets the explicit positive signal. Cap hold to the video's
+          // actual duration so short clips don't re-loop ("rewatch bug").
+          const playingVideo = findPlayingVideo();
+          const holdMs = holdForVideo(decision.category, playingVideo);
+          autoAdvanceAt = Date.now() + holdMs;
+          console.log(`[MoodScroll] MATCH: ${decision.category}, holding ${holdMs}ms (dur=${playingVideo?.duration}s) | ${decision.reason || ''}`);
+          if (autoEngage) maybeAutoLike(videoSrcAtStart, true);
+        }
+      } catch (err) {
+        console.error('[MoodScroll] loop error:', err);
+        isClassifying = false;
+      }
+    }, CONFIG.tickIntervalMs);
+
+    // ---------- DOM HELPERS ----------
+    // TikTok preloads neighbors and DOESN'T always set `playsinline` or unpause.
+    // The current video is the one whose bounding rect is centered in the viewport.
+    function findPlayingVideo(): HTMLVideoElement | null {
+      const all = document.querySelectorAll<HTMLVideoElement>(CONFIG.videoSelector);
+      if (!all.length) return null;
+      const viewportCenter = window.innerHeight / 2;
+      let best: HTMLVideoElement | null = null;
+      let bestDist = Infinity;
+      for (const v of all) {
+        const rect = v.getBoundingClientRect();
+        if (rect.height < CONFIG.minVideoHeight) continue;
+        if (rect.bottom < 0 || rect.top > window.innerHeight) continue;
+        if (!v.currentSrc) continue;
+        const center = (rect.top + rect.bottom) / 2;
+        const dist = Math.abs(center - viewportCenter);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = v;
+        }
+      }
+      return best;
     }
-    
-    // Stop local pomodoro countdown
-    function stopLocalPomodoroUpdate() {
-      if (pomodoroUpdateInterval) {
-        clearInterval(pomodoroUpdateInterval);
-        pomodoroUpdateInterval = null;
+
+    function findFeedItems(): Element[] {
+      return Array.from(document.querySelectorAll(CONFIG.itemSelector));
+    }
+
+    function findItemContainingVideo(src: string): Element | null {
+      for (const item of findFeedItems()) {
+        const v = item.querySelector('video');
+        if (v && (v as HTMLVideoElement).currentSrc === src) return item;
+      }
+      return null;
+    }
+
+    // Detect TikTok sponsored ads. Returns true if the video card has any
+    // ad markers — checked BEFORE classification so ads are skipped for free.
+    function isSponsoredCard(card: HTMLElement | null, caption: string): boolean {
+      if (!card) return false;
+      // 1. Specific data-e2e ad markers
+      const adSelectors = [
+        '[data-e2e="ad-info"]',
+        '[data-e2e="video-ad"]',
+        '[data-e2e="ad-card"]',
+        '[data-e2e="ad-overlay"]',
+        '[data-e2e="ad-tag"]',
+        '[data-e2e="branded-content-tag"]',
+        '[data-e2e="paid-partnership-tag"]'
+      ];
+      for (const sel of adSelectors) {
+        if (card.querySelector(sel)) return true;
+      }
+      // 2. "Sponsored" / "Ad" text inside the card (TikTok displays this badge)
+      const allText = card.textContent || '';
+      // Use whole-word match so we don't false-fire on words like "Sponsoring"
+      if (/(^|\s)(Sponsored|Promoted|Advertisement|Paid partnership)(\s|$|\.|,)/i.test(allText)) {
+        return true;
+      }
+      // 3. Sponsored hashtags in caption
+      const adHashtagRegex = /#(ad|sponsored|spon|paidpromotion|paidpartnership|partnership|brandpartner|sponsoredpost|brandeddeal|advertorial)\b/i;
+      if (adHashtagRegex.test(caption)) return true;
+      // 4. "Learn more" / "Shop now" / "Download" CTA buttons typical of ads
+      const ctaSelectors = [
+        'button[data-e2e*="ad-button" i]',
+        'a[data-e2e*="ad-link" i]',
+        'a[href*="utm_source=tiktok"]'
+      ];
+      for (const sel of ctaSelectors) {
+        if (card.querySelector(sel)) return true;
+      }
+      return false;
+    }
+
+    // Single-frame capture with retry — tries up to 3 times waiting briefly
+    // between attempts because TikTok preloads videos with readyState 0/1
+    // and we need to wait for it to reach readyState >= 2 to drawImage.
+    function captureSingleFrameSync(video: HTMLVideoElement): string | null {
+      if (video.readyState < 2) return null;
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 360;
+        canvas.height = 640;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        return canvas.toDataURL('image/jpeg', 0.6);
+      } catch {
+        return null;
       }
     }
-  },
+    async function captureSingleFrame(video: HTMLVideoElement): Promise<string | null> {
+      let frame = captureSingleFrameSync(video);
+      if (frame) return frame;
+      // Try harder: nudge play() to trigger frame loading, then retry up to 5x
+      try { await video.play().catch(() => {}); } catch {}
+      for (let i = 0; i < 5; i++) {
+        await new Promise(r => setTimeout(r, 200));
+        frame = captureSingleFrameSync(video);
+        if (frame) return frame;
+      }
+      return null;
+    }
+
+    async function captureFramesOverTime(video: HTMLVideoElement): Promise<string[]> {
+      const frames: string[] = [];
+      const delays = [0, 600, 600];
+      const srcAtStart = video.currentSrc;
+      for (const delay of delays) {
+        if (delay > 0) await new Promise(r => setTimeout(r, delay));
+        if (video.paused || video.readyState < 2) break;
+        if (video.currentSrc !== srcAtStart) break;
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = 360;
+          canvas.height = 640;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) continue;
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          frames.push(canvas.toDataURL('image/jpeg', 0.6));
+        } catch (err) {
+          console.warn('[MoodScroll] frame capture failed:', err);
+        }
+      }
+      return frames;
+    }
+
+    function skipToNext(targetSrc: string) {
+      tryAdvance(targetSrc);
+      setTimeout(() => {
+        const video = findPlayingVideo();
+        if (video && video.currentSrc === targetSrc) tryAdvance(targetSrc);
+      }, 400);
+    }
+
+    function tryAdvance(targetSrc: string) {
+      // Verified: no `[data-e2e="arrow-right"]` button exists on tiktok.com/foryou.
+      // Primary: scrollIntoView the next snap item.
+      const items = findFeedItems();
+      const currentItem = findItemContainingVideo(targetSrc) || items.find(i => {
+        const r = i.getBoundingClientRect();
+        return r.top < window.innerHeight / 2 && r.bottom > window.innerHeight / 2;
+      });
+      if (currentItem && items.length) {
+        const idx = items.indexOf(currentItem);
+        const nextItem = idx >= 0 ? items[idx + 1] : null;
+        if (nextItem) {
+          nextItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          return;
+        }
+      }
+      // Fallback: scroll the snap container by one viewport height.
+      const container = document.getElementById(CONFIG.scrollContainerId);
+      if (container) {
+        container.scrollBy({ top: container.clientHeight, behavior: 'smooth' });
+        return;
+      }
+      window.scrollBy({ top: window.innerHeight, behavior: 'smooth' });
+    }
+
+    // ---------- AUTO-LIKE ----------
+    // forceNow=true: skip the random probability roll and use a short 0.8-1.4s
+    // delay. Used by Auto Scroll mode so every video in the 5s window gets liked.
+    function maybeAutoLike(videoSrc: string, forceNow: boolean = false) {
+      if (likedVideoSrcs.has(videoSrc)) return;
+      if (!forceNow && Math.random() > tuning().likeProbability) return;
+      // Rate-limit check
+      const now = Date.now();
+      while (likeTimestamps.length && now - likeTimestamps[0] > CONFIG.likeRateLimitWindowMs) {
+        likeTimestamps.shift();
+      }
+      if (likeTimestamps.length >= CONFIG.likeRateLimitMax) {
+        console.log('[MoodScroll] like rate-limit reached, skipping');
+        return;
+      }
+      const delay = forceNow
+        ? 800 + Math.random() * 600
+        : CONFIG.likeDelayMinMs + Math.random() * CONFIG.likeDelayJitterMs;
+      setTimeout(() => {
+        const video = findPlayingVideo();
+        if (!video || video.currentSrc !== videoSrc) return;
+        // Scope the like button to the current video's card to avoid liking a neighbor.
+        const card = video.closest(CONFIG.itemSelector) as HTMLElement | null;
+        const scope: ParentNode = card || document;
+        let button: HTMLButtonElement | null = null;
+        const likeIcon = scope.querySelector<HTMLElement>(CONFIG.likeIconSelector);
+        if (likeIcon) button = likeIcon.closest('button');
+        if (!button) button = scope.querySelector<HTMLButtonElement>(CONFIG.likeAriaSelector);
+        if (!button) {
+          console.log('[MoodScroll] like button not found');
+          return;
+        }
+        // Check if already liked. TikTok flips the aria-label from "Like video" to "Unlike".
+        const labelBefore = (button.getAttribute('aria-label') || '').toLowerCase();
+        if (labelBefore.startsWith('unlike') || button.getAttribute('aria-pressed') === 'true') {
+          likedVideoSrcs.add(videoSrc);
+          return;
+        }
+        button.click();
+        likedVideoSrcs.add(videoSrc);
+        likeTimestamps.push(Date.now());
+        console.log('[MoodScroll] ❤️ liked match');
+      }, delay);
+    }
+  }
 });
