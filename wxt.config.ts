@@ -10,8 +10,8 @@ export default defineConfig({
     permissions: ['storage', 'activeTab', 'scripting', 'tabs'],
     // tiktok.com is the only host we need at install time (for the content
     // script). MV3 background service workers can fetch ANY URL without
-    // host_permissions — so api.openai.com, muon-lite, anthropic, or any
-    // custom proxy URL the user sets all work without being declared here.
+    // host_permissions — so api.openai.com, anthropic, or any custom
+    // proxy URL the user sets all work without being declared here.
     // This keeps the Chrome Web Store review surface minimal.
     host_permissions: [
       'https://www.tiktok.com/*'

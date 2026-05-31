@@ -208,9 +208,9 @@ function serialized<T>(fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
-// Public users hit OpenAI directly with their own key. Users we
-// onboard personally (with a muon-lite key) can change the URL to
-// https://muon-lite.up.railway.app in the options page.
+// Hits OpenAI directly with the user's own key by default. The proxy
+// URL can be changed in the options page to point at any compatible
+// endpoint (e.g. an Anthropic-style / LiteLLM proxy).
 const DEFAULT_PROXY_URL = 'https://api.openai.com';
 const DEFAULT_MODEL = 'gpt-4o';
 
@@ -356,8 +356,8 @@ async function classifyWithClaude(args: {
   const modelToUse = args.model || DEFAULT_MODEL;
 
   // Auto-detect API format by URL. OpenAI direct → use chat-completions.
-  // Anything else (muon-lite, any LiteLLM-style Anthropic proxy) → use
-  // the Anthropic /v1/messages format with x-api-key auth.
+  // Anything else (any LiteLLM-style Anthropic proxy) → use the
+  // Anthropic /v1/messages format with x-api-key auth.
   const useOpenAIFormat = /api\.openai\.com/i.test(baseUrl);
 
   if (useOpenAIFormat) {
@@ -393,8 +393,8 @@ async function classifyWithClaude(args: {
     catch (err) { throw new Error('parse_failed: ' + cleaned.slice(0, 200)); }
   }
 
-  // Anthropic format path — used by muon-lite proxy and any other
-  // LiteLLM-style endpoint set in the proxy URL field.
+  // Anthropic format path — used by any LiteLLM-style endpoint set in
+  // the proxy URL field.
   const imageBlocks = (args.frames || []).map(frame => ({
     type: 'image' as const,
     source: {
