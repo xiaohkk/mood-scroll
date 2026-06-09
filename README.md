@@ -52,9 +52,10 @@ npm run zip      # rebuilds mood-scroll-extension.zip
 
 Built with [WXT](https://wxt.dev) (TypeScript + Vite).
 
-## License & credits
+## What's next
 
-Released under the [MIT License](./LICENSE).
-
-- **Original Mood Scroll** was created by **Stefano Colmant** — Honorable Mention at the UCSB.network Hackathon.
-- This fork is maintained by **Jay Wang** ([@xiaohkk](https://github.com/xiaohkk)), covering the landing page, packaging, and ongoing maintenance.
+- **Instagram Reels & YouTube Shorts.** Same vision-classifier infrastructure, different DOM. The hard work is done.
+- **Mood scheduling.** "Cooking in the morning, brain rot at night" without switching modes by hand.
+- **Negative modes.** "Show me anything except politics and engagement bait." Pick what to avoid, not just what to see.
+- **End-of-session receipt.** An honest visual of how many minutes you watched and what you actually consumed, to look at before opening TikTok again.
+- **Chrome Web Store.** Ship as an unlisted extension so it's shareable without sideloading a zip.
