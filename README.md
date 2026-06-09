@@ -51,3 +51,10 @@ npm run zip      # rebuilds mood-scroll-extension.zip
 ```
 
 Built with [WXT](https://wxt.dev) (TypeScript + Vite).
+
+## License & credits
+
+Released under the [MIT License](./LICENSE).
+
+- **Original Mood Scroll** was created by **Stefano Colmant** — Honorable Mention at the UCSB.network Hackathon.
+- This fork is maintained by **Jay Wang** ([@xiaohkk](https://github.com/xiaohkk)), covering the landing page, packaging, and ongoing maintenance.
